@@ -2,6 +2,11 @@
 
 All notable changes to the monday-architect skill will be documented here.
 
+## [2026-05-04-patch1] — workspace-selection fix
+
+### Fixed
+- §2 now explicitly requires calling `list_workspaces` before creating any board and matching the chosen product kind to the correct existing workspace. This prevents Claude from building CRM, Dev, or Service boards inside the default Work Management workspace — the most common mis-build pattern found in live testing.
+
 ## [2026-05-04] — initial release
 
 First public release.

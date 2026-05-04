@@ -1,7 +1,7 @@
 ---
 name: monday-architect
 description: Use this skill ANY time the user is building, modifying, or reasoning about a monday.com account via the monday MCP connector — workspaces, boards, dashboards, docs, forms, items, columns, widgets, CRM pipelines, Dev sprints, projects/portfolios, Connect Boards / mirrors, formulas, automations/triggers, webhooks, audit logs, integrations, the marketplace, the Objects platform, doc blocks, or anything queryable through the monday GraphQL API. Acts as the operator's manual for the MCP connector and forces correct product/architecture choices. Trigger on any mention of monday.com, monday boards/dashboards/docs, leads/deals/CRM, sprints/epics, item linking, the `mcp__claude_ai_monday_com__*` tool prefix, or monday GraphQL.
-version: 2026-05-04
+version: 2026-05-04-patch1
 ---
 
 # monday.com architect — operator's manual
@@ -81,6 +81,24 @@ If unsure which products are enabled, call `get_user_context` first — its `acc
   - `workspace_info` returns up to 100 of each object type per workspace; paginate for larger.
 - Use folders. Don't dump 20 boards at the workspace root.
 - Naming: prefix related objects (`[Sales] Leads`, `[Sales] Deals`, `[Sales] Accounts`) so they cluster in lists and search.
+
+### CRITICAL: Match product kind to the correct existing workspace
+
+**Before creating any board, you MUST identify the right workspace for the chosen product kind.** Do NOT create a generic `open` workspace and build everything there.
+
+**Required pre-build workflow:**
+
+1. Call `list_workspaces` to get all workspaces on the account.
+2. For each candidate workspace, call `workspace_info(workspace_id)` or use raw GraphQL to read its `kind` field — but the key signal is the workspace **name** and any boards already inside it.
+3. Match the target product kind to the workspace that was provisioned for that product:
+   - CRM boards (`leads`, `deals`, `contacts`, `accounts`, `pipeline`) → find the workspace named "CRM", "Sales", or containing native CRM boards. **Do NOT use a Work Management / `core` workspace.**
+   - Dev boards (`sprints`, `epics`, `bugs`) → find the workspace named "Dev", "R&D", "Engineering", or containing sprint boards.
+   - Service boards (`tickets`, `SLA`) → find the workspace named "Service", "Support".
+   - Work Management boards (`tasks`, `projects`, `ops`) → find the `core` workspace.
+4. **If a matching workspace already exists, build inside it.** Pass `workspace_id` to `create_board`.
+5. Only create a new workspace if none exists for that product kind. When creating, name it to match the product (e.g. "CRM", "Dev", "Service") — don't use a generic name.
+
+**Anti-pattern to refuse:** building CRM, Dev, or Service boards inside the default Work Management workspace. monday.com maintains product-specific workspaces with native context (column templates, views, integrations). Boards placed in the wrong workspace lose that context and are harder for end-users to find.
 
 ---
 
