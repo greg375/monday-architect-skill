@@ -21,7 +21,31 @@ The whole skill was verified end-to-end against the live MCP (creating workspace
 
 ## Install
 
-Clone or copy the `skills/` directory into your Claude Code skills folder:
+Pick the path that matches your Claude surface.
+
+### Path 1 — Claude.ai (web or desktop app) — recommended for most users
+
+If your Claude.ai account has the **Skills** capability enabled (Settings → Capabilities → Skills):
+
+1. Download both zips from the [latest release](https://github.com/greg375/monday-architect-skill/releases/latest):
+   - `monday-architect.zip`
+   - `refresh-monday-skill.zip`
+2. Claude.ai → Settings → Capabilities → Skills → **Upload skill** (do both zips).
+3. Connect the monday.com MCP at https://claude.ai/customize/connectors.
+
+Detailed walkthrough: [docs/claude-ai-skills-install.md](docs/claude-ai-skills-install.md).
+
+If your account doesn't have the Skills feature yet, use the [Project fallback](docs/claude-ai-project-setup.md).
+
+### Path 2 — Claude Code (CLI, VS Code extension, or claude.ai/code)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/greg375/monday-architect-skill/main/install.sh | bash
+```
+
+This installs both skills into `~/.claude/skills/`. They auto-trigger on any monday-related prompt — no manual invocation.
+
+Manual install (if you prefer not to pipe to bash):
 
 ```bash
 git clone https://github.com/greg375/monday-architect-skill ~/monday-architect-skill
@@ -30,18 +54,10 @@ cp -r ~/monday-architect-skill/skills/monday-architect ~/.claude/skills/
 cp -r ~/monday-architect-skill/skills/refresh-monday-skill ~/.claude/skills/
 ```
 
-Or run the install script:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/greg375/monday-architect-skill/main/install.sh | bash
-```
-
-(Both skills install into `~/.claude/skills/`. They're independent — install one without the other if you prefer.)
-
 ## Prerequisites
 
-- **Claude Code** (CLI, desktop app, or VS Code extension).
-- **The monday.com MCP connector** connected to your Claude account. Connect it at https://claude.ai/customize/connectors. The skill expects tool names of the form `mcp__claude_ai_monday_com__*`.
+- **A Claude surface that supports Skills:** Claude Code (CLI, desktop app, VS Code extension, or claude.ai/code in browser) OR Claude.ai web/desktop with the Skills capability enabled.
+- **The monday.com MCP connector** connected to your Claude account. Connect it at https://claude.ai/customize/connectors. The skill expects tool names of the form `mcp__claude_ai_monday_com__*` (or the Claude.ai-rendered equivalent).
 - **A monday.com account** you have permission to build in. The skill will work on any tier, but some features (validation rules, certain bulk-job paths, owner-restricted mutations) are gated by plan/role.
 
 ## Use
