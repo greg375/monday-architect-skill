@@ -1,7 +1,7 @@
 ---
 name: monday-architect
 description: Use this skill ANY time the user is building, modifying, or reasoning about a monday.com account via the monday MCP connector — workspaces, boards, dashboards, docs, forms, items, columns, widgets, CRM pipelines, Dev sprints, projects/portfolios, Connect Boards / mirrors, formulas, automations/triggers, webhooks, audit logs, integrations, the marketplace, the Objects platform, doc blocks, or anything queryable through the monday GraphQL API. Acts as the operator's manual for the MCP connector and forces correct product/architecture choices. Trigger on any mention of monday.com, monday boards/dashboards/docs, leads/deals/CRM, sprints/epics, item linking, the `mcp__claude_ai_monday_com__*` tool prefix, or monday GraphQL.
-version: 2026-05-04-patch4
+version: 2026-05-04-patch5
 ---
 
 # monday.com architect — operator's manual
@@ -78,32 +78,43 @@ monday accounts come with **product workspaces pre-provisioned** at signup. Each
 
 **This is the default: use the existing native board. Add groups, columns, or seed data to it. `create_board` is the last resort — only when a board of that type genuinely doesn't exist in the workspace.**
 
-### STOP: if a required product workspace doesn't exist
+### STOP: if a required product workspace or its native boards are missing
 
-**The MCP cannot provision a product workspace with native boards.** Only the monday.com UI does this (Settings → Products → enable the product). If `list_workspaces` + `get_user_context` show that a required product is not enabled or its workspace is missing:
+**The MCP cannot provision a product workspace with native boards.** Only the monday.com UI does this when you enable a product. There are two failure modes — handle both:
 
-1. **Stop immediately.** Do not create a generic substitute board.
-2. **Tell the user exactly what to do:**
-   > "To build a [product name] setup, you need to enable the [product] product on your monday.com account first. Go to **monday.com → your avatar (top right) → Administration → Products** (or **Account settings → Products**), enable **[product name]**, and then come back. This will provision the native [Leads/Contacts/Accounts/Tickets/Sprint boards/etc.] workspace automatically. I can't create those native boards via the API."
-3. **Wait** — do not proceed until the user confirms the product is enabled.
+#### Case 1: Product not enabled at all (`account.products` doesn't contain the kind)
 
-Product → workspace name mapping (for your message to the user):
-- `crm` → "monday CRM" → workspace named "CRM" → native: Leads, Contacts, Accounts, Opportunities, Sales Activities
-- `software` → "monday Dev" → workspace named "Dev" → native: Feature request, Product backlog, Customer feedback, Quarterly goals, Sprint boards
-- `service` → "monday Service" → workspace named "Service" → native: Tickets, Knowledge Base
-- `marketing_campaigns` → "monday Marketer" → workspace named "Marketing" → native: Campaigns, Content Calendar, Briefs
-- `project_management` → "monday Projects" → adds Portfolio capability on top of core workspace
-- `core` → "Work Management" → workspace named "Main workspace"
+Stop and tell the user:
+> "To build a [Product Name] setup, you need to enable the product on your monday.com account first. Go to **monday.com → your avatar → Administration → Products**, enable **[Product Name]**, and come back. This automatically creates the native workspace with all the pre-built boards (Leads, Contacts, Accounts, etc.). I can't create those native boards via the API — they only exist when the product is enabled through the UI."
+
+#### Case 2: Product is enabled, workspace exists, but workspace is empty or missing native boards
+
+Some products (especially `service`) have a workspace provisioned but no boards inside it yet. Stop and tell the user:
+> "Your [Product Name] workspace exists but the native boards haven't been set up yet. Open the **[Workspace Name]** workspace in monday.com and click **'Get started'** or use the template picker to initialise the default boards. Once the native boards exist I can start building on top of them."
+
+#### Per-product: what to tell the user and what to look for
+
+| Product kind | Product name | Workspace to find | Native boards that must exist before building |
+|---|---|---|---|
+| `crm` | monday CRM | "CRM" | Leads, Contacts, Accounts, Opportunities (or Deals), Sales Activities |
+| `software` | monday Dev | "Dev" | Feature request, Product backlog, Customer feedback, Quarterly goals |
+| `service` | monday Service | "Service" | Tickets (if empty: tell user to initialise via UI) |
+| `marketing_campaigns` | monday Marketer | "Marketing" (or "Marketing Campaigns") | Campaigns, Content Calendar |
+| `project_management` | monday Projects | Uses existing `core` workspace | No separate workspace — but requires `create_project` / `create_portfolio` mutations |
+| `core` | Work Management | "Main workspace" (or any named workspace) | Project/task boards — these can be created via MCP if absent |
+
+**`core` is the only product where creating boards via MCP without native templates is acceptable** — Work Management boards have no fixed native structure. All other products have native boards that must come from the UI first.
 
 ### Required workflow before creating any board
 
 1. Call `get_user_context` — check `account.products` for enabled product kinds.
-2. Call `list_workspaces` — get all workspaces.
-3. Identify the workspace for the target product kind (by name).
-4. **If the product is not in `account.products` OR its workspace is missing → STOP and tell the user to enable it** (see above).
-5. Call `workspace_info(workspace_id)` — scan `folders[].boards[].name` for the entity you need.
-6. **If a native board exists → use it.** Add items/groups/columns. Do not duplicate it.
-7. **Only `create_board` if genuinely absent** — and always in the correct product workspace.
+2. **If the required product kind is absent → Case 1 stop** (tell user to enable via Administration → Products).
+3. Call `list_workspaces` — find the workspace for the target product.
+4. **If the workspace is missing → Case 1 stop** (same message — product likely not enabled).
+5. Call `workspace_info(workspace_id)` — scan all folders and boards.
+6. **If the workspace exists but has no native boards → Case 2 stop** (tell user to initialise via the workspace's Get Started flow).
+7. **If native boards exist → use them.** Add items/groups/columns. Do not duplicate.
+8. **Only `create_board` if a specific board type is genuinely absent from an already-initialised workspace** — and only in the correct product workspace.
 
 ---
 

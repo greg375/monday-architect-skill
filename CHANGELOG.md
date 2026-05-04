@@ -2,6 +2,15 @@
 
 All notable changes to the monday-architect skill will be documented here.
 
+## [2026-05-04-patch5] — two-case stop rule for missing product workspaces
+
+### Added
+- Case 1: product not in `account.products` → stop, give user exact Administration → Products path with per-product message template.
+- Case 2: product enabled + workspace exists but is empty (e.g. Service on many accounts) → stop, tell user to open the workspace and click "Get started" to initialise native boards.
+- Per-product table: what workspace to look for, which native boards must exist before building, which products require UI initialisation vs MCP-only (`core` is the only one that doesn't require UI first).
+- Explicit rule: `core` is the only product where creating boards via MCP without native templates is acceptable.
+- Required workflow updated to 8 steps covering both failure modes before any mutation is written.
+
 ## [2026-05-04-patch3] — full cross-product architecture + product-not-enabled stop rule
 
 ### Changed
