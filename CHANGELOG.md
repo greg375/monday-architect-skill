@@ -2,6 +2,13 @@
 
 All notable changes to the monday-architect skill will be documented here.
 
+## [2026-05-04-patch2] — native board catalog + search-before-build rule
+
+### Added
+- §1.5 "Native boards — search before you build": verified column schemas for all native CRM boards (Leads, Contacts, Accounts, Opportunities/Deals, Sales Activities, Products & Services, Accounts Management), plus board sets for Dev, Service, and Marketer products. Works on any account, not account-specific.
+- Anti-pattern #2: creating CRM/Dev/Service boards from scratch when native boards already exist in the product workspace.
+- Rule: call `workspace_info` on the product workspace before `create_board`; use the existing native board if present.
+
 ## [2026-05-04-patch1] — workspace-selection fix
 
 ### Fixed

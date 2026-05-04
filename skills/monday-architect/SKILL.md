@@ -1,7 +1,7 @@
 ---
 name: monday-architect
 description: Use this skill ANY time the user is building, modifying, or reasoning about a monday.com account via the monday MCP connector — workspaces, boards, dashboards, docs, forms, items, columns, widgets, CRM pipelines, Dev sprints, projects/portfolios, Connect Boards / mirrors, formulas, automations/triggers, webhooks, audit logs, integrations, the marketplace, the Objects platform, doc blocks, or anything queryable through the monday GraphQL API. Acts as the operator's manual for the MCP connector and forces correct product/architecture choices. Trigger on any mention of monday.com, monday boards/dashboards/docs, leads/deals/CRM, sprints/epics, item linking, the `mcp__claude_ai_monday_com__*` tool prefix, or monday GraphQL.
-version: 2026-05-04-patch1
+version: 2026-05-04-patch2
 ---
 
 # monday.com architect — operator's manual
@@ -67,6 +67,76 @@ monday.com is **eight product kinds** (verified via `WorkspacesQueryAccountProdu
 - Default → `core`.
 
 If unsure which products are enabled, call `get_user_context` first — its `account.products` field lists active product kinds.
+
+---
+
+## 1.5 Native boards — search before you build
+
+**Every monday product ships with a pre-built set of native boards in its workspace.** These boards have purpose-specific `item_terminology`, pre-wired `board_relation` columns, native column IDs (e.g. `lead_*`, `deal_*`, `contact_*`), and built-in views. Building from scratch loses all of that.
+
+**Rule: before creating any board for a known CRM / Dev / Service / Marketing entity, call `workspace_info` on the matching workspace and check whether a native board of that type already exists. If it does, use it — add items, add columns, or seed data. Only `create_board` if the board type genuinely does not exist yet.**
+
+### monday CRM — native board set (verified)
+
+The `crm` workspace always provisions these boards on account creation:
+
+| Board | `item_terminology` | Core native columns |
+|---|---|---|
+| **Leads** | `Lead` | `lead_status` (status), `lead_email` (email), `lead_phone` (phone), `lead_company` (text), `lead_owner` (people), `date` (Last activity), `location5` (location), `long_text` (Comments) |
+| **Contacts** | `Contact` | `contact_email` (email), `contact_phone` (phone), `contact_company` (text), `contact_account` (board_relation → Accounts), `contact_deal` (board_relation → Opportunities), `status` (Type: Customer/Vendor/Partner/VIP), `title5` (dropdown: CEO/COO/Director/Manager/VP/Team Member/C Level), `date` (Last interaction), `location` (location) |
+| **Accounts** | `Account` | `company_domain` (link), `industry` (dropdown — 51 industry values), `status` (Account Status: Buying process/Client/Past Client), `account_contact` (board_relation → Contacts), `account_deal` (board_relation → Opportunities), `mirror` (Account Value — sum of closed won deals), `employee_count` (text), `headquarters_loc` (text) |
+| **Opportunities / Deals** | `Opportunity` | `deal_stage` (status: New/Discovery/Proposal/Negotiation/Legal/Won/Lost), `deal_value` (numbers $), `deal_owner` (people), `deal_expected_close_date` (date), `deal_close_date` (date), `deal_contact` (board_relation → Contacts), `deal_close_probability` (formula), `deal_forecast_value` (formula) |
+| **Sales Activities** | `Activity` | `activity_item` (board_relation → Leads/Contacts/Accounts/Opportunities), `activity_owner` (people), `activity_start_time` / `activity_end_time` (date), `activity_status` (Open/Done), `activity_type` (Meeting/Call summary), `long_text` (Description) |
+| **Products & Services** | `Product` | Product catalog linked to deals |
+| **Accounts Management / Onboarding** | `Client` | Post-sale onboarding tracker |
+
+**Relationship wiring (native, already built):**
+- Leads ↔ Contacts ↔ Accounts form the core deduplication triangle
+- Contacts → Opportunities (deal pipeline view per contact)
+- Accounts → Opportunities → mirror of deal value
+- Activities → any CRM board (unified activity log)
+
+**When building CRM demos:** call `workspace_info` on the CRM workspace first. Boards named "Leads", "Contacts", "Accounts", "Opportunities"/"Deals", "Sales Activities" are the native set — seed them with items rather than creating new boards.
+
+### monday Dev — native board set
+
+The `software` workspace provisions:
+
+| Board | Use |
+|---|---|
+| **Sprint boards** | Auto-created per sprint via `create_sprint`. Query with `get_monday_dev_sprints_boards`. |
+| **Epics** | Epic tracking board — linked to sprint items |
+| **Backlog** | Items not yet in a sprint |
+| **Bugs** | Bug tracking with severity/priority |
+| **Roadmap** | Timeline-based planning board |
+
+Use sprint-native queries (`get_sprints_metadata`, `get_sprint_summary`) rather than building from scratch.
+
+### monday Service — native board set
+
+The `service` workspace provisions:
+
+| Board | Use |
+|---|---|
+| **Tickets** | `item_terminology: Ticket` — Status: New/Open/In progress/Resolved/Closed, SLA columns |
+| **Knowledge Base** | Doc-style articles linked to ticket board |
+
+### monday Marketer — native board set
+
+The `marketing` / `marketing_campaigns` workspace provisions:
+
+| Board | Use |
+|---|---|
+| **Campaigns** | Campaign planning with timeline, budget, owner |
+| **Content Calendar** | Calendar view of content items |
+| **Briefs** | Creative brief docs + board |
+
+### General rule for all products
+
+1. `workspace_info(crm_workspace_id)` → scan `folders[].boards[].name` for the entity type you need.
+2. If found → use that board's ID. Add groups, items, or columns as needed.
+3. If not found → `create_board` in that workspace with matching `item_terminology` and the column schema above.
+4. **Never build a generic Status-column board to represent CRM entities, Dev sprints, or Service tickets.** The native boards already exist and are pre-wired.
 
 ---
 
@@ -454,7 +524,8 @@ Best practices:
 ## 22. Anti-patterns — STOP if you catch yourself doing these
 
 1. CRM pipeline on a `core` board with a Status column — use `crm`.
-2. "Portfolio" built from a regular board + manual mirrors — use Projects/Portfolios (`create_project`, `create_portfolio`, `connect_project_to_portfolio`).
+2. Creating a new Leads / Contacts / Accounts / Deals / Activities board from scratch when the native CRM workspace already has one — call `workspace_info` on the CRM workspace first, find the existing board, and seed it. Same applies to Dev sprints, Service tickets, and Marketing campaigns.
+3. "Portfolio" built from a regular board + manual mirrors — use Projects/Portfolios (`create_project`, `create_portfolio`, `connect_project_to_portfolio`).
 3. Related-item ID stored in a `text` column — use `board_relation` + `mirror`.
 4. Refusing a widget without checking `all_widgets_schema`. (And don't promise widget types not in the verified catalog: only `NUMBER`, `CHART`, `BATTERY`, `CALENDAR`, `GANTT`, `LISTVIEW`, `APP_FEATURE`.)
 5. `change_item_column_values` payload written from memory — call `get_column_type_info` first.
