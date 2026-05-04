@@ -1,0 +1,67 @@
+name: Version + changelog check
+
+on:
+  pull_request:
+    paths:
+      - 'skills/**/SKILL.md'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify version bump on monday-architect SKILL.md content changes
+        run: |
+          set -euo pipefail
+
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          git fetch origin "$BASE_REF" --depth=1
+
+          # Did monday-architect/SKILL.md change?
+          if ! git diff --name-only "origin/$BASE_REF...HEAD" | grep -q '^skills/monday-architect/SKILL\.md$'; then
+            echo "monday-architect/SKILL.md not modified — skipping version check."
+            exit 0
+          fi
+
+          # Diff to see if anything other than the version line changed
+          BODY_DIFF=$(git diff "origin/$BASE_REF...HEAD" -- skills/monday-architect/SKILL.md \
+            | grep -E '^[-+][^+-]' \
+            | grep -v -E '^[-+]version: ' || true)
+
+          if [ -z "$BODY_DIFF" ]; then
+            echo "Only the version line changed — that's fine."
+            exit 0
+          fi
+
+          # Body changed → require a version bump
+          OLD_VER=$(git show "origin/$BASE_REF:skills/monday-architect/SKILL.md" | grep -E '^version:' | head -1 | awk '{print $2}')
+          NEW_VER=$(grep -E '^version:' skills/monday-architect/SKILL.md | head -1 | awk '{print $2}')
+
+          if [ -z "$NEW_VER" ]; then
+            echo "::error::skills/monday-architect/SKILL.md has no 'version:' line in frontmatter."
+            exit 1
+          fi
+
+          if [ "$OLD_VER" = "$NEW_VER" ]; then
+            echo "::error::SKILL.md content changed but version is still $NEW_VER. Bump 'version: YYYY-MM-DD' in the frontmatter."
+            exit 1
+          fi
+
+          echo "Version bumped: $OLD_VER → $NEW_VER ✓"
+
+      - name: Verify CHANGELOG entry exists for new version
+        run: |
+          set -euo pipefail
+          NEW_VER=$(grep -E '^version:' skills/monday-architect/SKILL.md | head -1 | awk '{print $2}')
+          if [ -z "$NEW_VER" ]; then
+            echo "No version line; skipping changelog check."
+            exit 0
+          fi
+          if ! grep -q "## \[$NEW_VER\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md is missing a section for version $NEW_VER. Add a '## [$NEW_VER]' entry."
+            exit 1
+          fi
+          echo "CHANGELOG entry for $NEW_VER found ✓"
