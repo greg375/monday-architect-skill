@@ -1,7 +1,7 @@
 ---
 name: monday-architect
 description: Use this skill ANY time the user is building, modifying, or reasoning about a monday.com account via the monday MCP connector — workspaces, boards, dashboards, docs, forms, items, columns, widgets, CRM pipelines, Dev sprints, projects/portfolios, Connect Boards / mirrors, formulas, automations/triggers, webhooks, audit logs, integrations, the marketplace, the Objects platform, doc blocks, or anything queryable through the monday GraphQL API. Acts as the operator's manual for the MCP connector and forces correct product/architecture choices. Trigger on any mention of monday.com, monday boards/dashboards/docs, leads/deals/CRM, sprints/epics, item linking, the `mcp__claude_ai_monday_com__*` tool prefix, or monday GraphQL.
-version: 2026-05-04-patch5
+version: 2026-05-04-patch6
 ---
 
 # monday.com architect — operator's manual
@@ -30,7 +30,6 @@ Your training data on monday.com is stale. Before designing or executing, query 
 | Updating column values | call `get_column_type_schema` (via `all_monday_api`) or pull from `get_column_type_info` | Per-type value JSON shape — required for `change_item_column_values` |
 | Creating widgets | `all_widgets_schema` | Full JSON Schema 7 for every widget type |
 | Creating views | call `get_view_schema_by_type` (via `all_monday_api`) | Schema for `create_view` settings parameter |
-| **Before** any `board_relation` write or cross-board read | `link_board_items_workflow` | **Required precondition** — enforced by the MCP for `change_item_column_values` (when writing to `board_relation`) and `get_board_items_page` (when reading across linked boards) |
 | Anything not covered by a named tool | `all_monday_api` | Raw GraphQL fallback (validate against `get_graphql_schema` first) |
 | Searching existing content | `search` | Global search across boards/items/docs |
 | Inspecting a board | `get_board_info` → `get_board_items_page` (paginated, with cursor) | Metadata + items. Do NOT call `get_full_board_data` — it is marked internal-only / UI-triggered. |
@@ -125,7 +124,7 @@ The CRM workspace provisions these boards. Every monday CRM account has them.
 | Board | `item_terminology` | Key native column IDs | Cross-wired to |
 |---|---|---|---|
 | **Leads** | `Lead` | `lead_status` (status: New Lead/Attempted to contact/Contacted/Qualified/Unqualified), `lead_email` (email), `lead_phone` (phone), `lead_company` (text), `lead_owner` (people), `date` (Last activity), `location5` (location), `long_text` (Comments) | Contacts (duplicate detector), Accounts (existing account detector) |
-| **Contacts** | `Contact` | `contact_email` (email), `contact_phone` (phone), `contact_company` (text), `contact_account` (board_relation → Accounts), `contact_deal` (board_relation → Opportunities), `status` (Type: Customer/Vendor/Partner/VIP/N/A), `title5` (dropdown: CEO/COO/CIO/Director/Manager/VP/Team Member/C Level), `date` (Last interaction), `location` (location) | Accounts, Opportunities, Leads |
+| **Contacts** | `Contact` | `contact_email` (email), `contact_phone` (phone), `contact_company` (text), `contact_account` (board_relation → Accounts), `contact_deal` (board_relation → Opportunities), `status` (Type: Customer/Vendor/Partner/VIP/N/A), `title5` (dropdown: CEO/COO/CIO/Director/Manager/VP/Team Member/C Level/), `date` (Last interaction), `location` (location) | Accounts, Opportunities, Leads |
 | **Accounts** | `Account` | `company_domain` (link), `industry` (dropdown — 51 standard industry values), `status` (Account Status: Buying process/Client/Past Client), `account_contact` (board_relation → Contacts), `account_deal` (board_relation → Opportunities), `mirror` (Account Value — SUM mirror of Won deal values), `employee_count` (text), `headquarters_loc` (text) | Contacts, Opportunities, Projects (post-sale) |
 | **Opportunities / Deals** | `Opportunity` | `deal_stage` (status: New/Discovery/Proposal/Negotiation/Legal/Won/Lost), `deal_value` (numbers $), `deal_owner` (people), `deal_expected_close_date` (date), `deal_close_date` (date), `deal_contact` (board_relation → Contacts), `deal_close_probability` (formula % from stage), `deal_forecast_value` (formula: value × probability), monthly actual formulas (Jan–Dec), `deal_length` (formula), `dup__of_deal_age` (stage length formula) | Contacts, Accounts, Legal, Onboarding/Finance |
 | **Sales Activities** | `Activity` | `activity_item` (board_relation → Leads/Contacts/Accounts/Opportunities/Activities), `activity_owner` (people), `activity_start_time` / `activity_end_time` (date), `activity_status` (status: Open/Done), `activity_type` (status: Meeting/Call summary), `long_text` (Description) | All CRM boards (unified activity log) |
@@ -139,8 +138,10 @@ The CRM workspace provisions these boards. Every monday CRM account has them.
 - Contacts ↔ Opportunities: `contact_deal` column — deal history per contact
 - Accounts ↔ Opportunities: `account_deal` + `mirror` (Account Value) — all deals visible on the account
 - Accounts → Onboarding: `link_to_accounts_management` — won deal → onboarding project
-- Opportunities → Legal: `connect_boards41` → Legal Requests board
-- Opportunities → Finance/Invoices: `connect_boards4` → Finance & Collections board
+- Opportunities → Legal: `board_relation` column (ID varies by account, e.g. `connect_boards41`) → Legal Requests board
+- Opportunities → Finance/Invoices: `board_relation` column (ID varies by account, e.g. `connect_boards4`) → Finance & Collections board
+
+> **Column ID caveat:** The `contact_*`, `deal_*`, `activity_*`, `lead_*` prefixes are stable native conventions. Columns like `connect_boards41` / `connect_boards4` are auto-generated IDs that vary per account — always call `workspace_info` + `get_board_info` to resolve the actual column IDs on the target account before writing payloads.
 
 **When building CRM:** seed the existing native boards. Groups represent pipeline stages (e.g. "Working pipeline" / "Closed Won" / "Lost"). Do not create new Lead/Contact/Account/Deal boards.
 
@@ -153,129 +154,135 @@ The Dev workspace provisions these boards (verified from live account):
 | Board | `item_terminology` | Key columns | Purpose |
 |---|---|---|---|
 | **Feature request** | `Request` | `color_*` (Type: New feature/Feature improvement/Performance improvement), `long_text_*` (request + why), `email_*` (user email), `button` (To prioritize?) | External intake — comes with a Form view pre-built |
-| **Product backlog** | `Feature` | `assignee` (people), `backlog_timeline` (timeline), `status` (Ideation/Ready for dev/Dev in progress/Done/Stuck/Deprioritized), `backlog_impact` (High/Medium/Low), `backlog_effort` (XL/L/M/S), `backlog_priority` (Critical/High/Medium/Low), `backlog_files` (file — PRD attachment) | Quarterly planning with Gantt + Roadmap views |
-| **Customer feedback** | `Feedback` | `status` (Not read/To follow-up/Treated), `rating_*` (rating), `long_text_*` (what to improve), `dropdown_*` (Tags: Admin/Billing/Enterprise/Insights/Security etc.), `email_*` (user email) | External feedback — comes with a Form view pre-built |
-| **Quarterly goals** | `Goal` | `person` (people/Owners), `numeric_*` (Q start/Q goal/Q current — all %), `formula_*` (% of goal achieved) | OKR tracking with Goal progression + Hierarchy views |
+| **Product backlog** | `Feature` | `assignee` (people), `backlog_timeline` (timeline), `status` (Ideation/Ready for dev/Dev in progress/Done/Stuck/Deprioritized), `backlog_impact` (High/Medium/Low), `backlog_effort` (XL/L/M/S), `backlog_priority` (Critical/High/Medium/Low), `backlog_files` (file — for PRD attachment) | Quarterly planning with Gantt + Roadmap views |
+| **Customer feedback** | `Feedback` | `status` (Not read/To follow-up/Treated), `rating_*` (rating), `long_text_*` (what to improve), `dropdown_*` (Tags), `email_*` (user email) | External feedback — comes with a Form view pre-built |
+| **Quarterly goals** | `Goal` | `person` (people/Owners), `numeric_*` (Q start/Q goal/Q current — all %), `formula_*` (% of goal achieved) | OKR/goal tracking with Goal progression + Hierarchy views |
 | **PRD template** | `item` | `files` (file) | Product requirements doc — uses FeatureBoardView (Doc app) |
 
 **Sprint system (Dev) — how it actually works:**
-- Sprints are a **paired board set**: a "Sprints Metadata" board + a "Sprint Management" tasks board.
-- Create sprints via `create_sprint` (raw GraphQL) or use `get_monday_dev_sprints_boards` to find existing pairs.
-- Add tasks to a sprint: update the `task_sprint` column on the tasks board with the sprint item ID from the Sprints Metadata board.
-- `task_sprint` is tightly coupled to its paired sprints board — cross-pair operations fail.
-- Use `get_sprints_metadata`, `get_sprint_summary` for sprint-level reporting.
-- **Do NOT create a generic board for sprint tracking** — use or create the native sprint pair.
+- Sprints are created via `create_sprint` (raw GraphQL) which generates a **paired board set**: a "Sprints Metadata" board + a "Sprint Management" tasks board.
+- Query existing sprint pairs with `get_monday_dev_sprints_boards` — returns `{sprints_board, tasks_board}` pairs.
+- Add tasks to a sprint: set the `task_sprint` column on the tasks board to the sprint item ID from the Sprints Metadata board.
+- `task_sprint` is coupled to its paired sprints board only — cross-pair operations fail.
+- Use `get_sprints_metadata`, `get_sprint_summary` for sprint-level data.
+- **Do NOT create a generic board for sprint tracking** — use the native sprint pair.
 
 **Dev board relationships:**
-- Feature request → Product backlog: "To prioritize" button moves requests into the backlog
-- Product backlog → Sprint: backlog features get pulled into sprints via `task_sprint` column
-- Customer feedback → Product backlog: feedback informs backlog priority; can be linked via `board_relation`
+- Feature request → Product backlog: a "To prioritize" button moves requests → backlog items
+- Product backlog → Sprint: backlog features get pulled into sprints via `task_sprint`
+- Customer feedback → Product backlog: feedback informs backlog priority
 - Quarterly goals → Product backlog: goals link to epics/features in the backlog
-- **CRM → Dev link:** Customer feedback board should connect to CRM Accounts for ARR-weighted feature prioritization
+- **CRM → Dev link:** Customer feedback board connects CRM Accounts (ARR-weighted feature prioritization)
 
 ---
 
 ### monday Service (`service` workspace) — native board set
 
-The Service workspace may be **empty on some accounts** (not always seeded at signup). Always check `workspace_info` first.
+The Service workspace may be **empty on some accounts** (not always seeded at signup). When building Service:
 
-| Board | `item_terminology` | Key columns to build/use | Purpose |
+| Board | `item_terminology` | Key columns to create | Purpose |
 |---|---|---|---|
-| **Tickets** | `Ticket` | `status` (New/Open/In progress/On hold/Resolved/Closed), `priority` (status: Critical/High/Medium/Low), `ticket_type` (status: Bug/Question/Feature/Other), `assignee` (people), `reporter` (people), `due_date` (date), `contact` (board_relation → CRM Contacts), `account` (board_relation → CRM Accounts) | Core support queue |
-| **Knowledge Base** | `Article` | `category` (dropdown), `status` (Draft/Review/Published), `assignee` (people), `related_ticket` (board_relation → Tickets) | Self-service docs linked to ticket patterns |
+| **Tickets** | `Ticket` | `status` (New/Open/In progress/On hold/Resolved/Closed), `priority` (status: Critical/High/Medium/Low), `ticket_type` (status: Bug/Question/Feature/Other), `assignee` (people), `reporter` (people), `due_date` (date), `sla_breach` (formula or date), `contact` (board_relation → CRM Contacts), `account` (board_relation → CRM Accounts) | Core support queue |
+| **Knowledge Base** | `Article` | `category` (dropdown), `status` (Draft/Review/Published), `assignee` (people), `related_ticket` (board_relation → Tickets) | Self-service docs, links to ticket patterns |
+| **SLA Policies** | `Policy` | SLA tiers with response/resolution time targets | Reference board for SLA formula logic |
 
-**Service ↔ CRM wiring (critical):**
-- Tickets → CRM Contacts: support agent sees who the customer is immediately
-- Tickets → CRM Accounts: account-level support volume visible on Account board via `mirror`
-- Won Opportunities → Tickets: automation creates a welcome/onboarding ticket on deal close
+**Service ↔ CRM wiring (critical for demos):**
+- Tickets link to CRM Contacts (`board_relation`) — the support agent sees who the customer is
+- Tickets link to CRM Accounts — account-level support volume visible on Account board via `mirror`
+- Won deals in Opportunities trigger ticket creation (via automation/webhook)
+
+**If the Service workspace is empty:** follow the Case 2 stop rule above — tell the user to open the Service workspace and click "Get started" to initialise the native boards. The schema above is the reference for what to expect once they do. Do NOT create a Tickets board manually; the native board comes with pre-built views, SLA integrations, and form intake that a manually-created board won't have.
 
 ---
 
-### monday Work Management (`core` workspace — typically "Main workspace")
+### monday Work Management (`core` workspace — typically "Main workspace") — native board set
 
 The core workspace is for projects, tasks, ops, OKRs. It is **not** for CRM, Dev, or Service entities.
 
-Native patterns (not fixed templates — verify with `workspace_info`):
+Native patterns (not fixed templates — varies by account):
 - **Project boards** — timeline, owner, status, priority, dependency columns
-- **Task boards** — linked to project board via `board_relation`; auto-created alongside project boards by `create_project`
+- **Task boards** — linked to project board via `board_relation`
+- **Resource planner** — auto-created alongside project boards when using `create_project`
 - **OKR / Goals board** — company/department/team goal hierarchy
-- **Portfolio** — NOT a regular board; created via `create_portfolio` + `connect_project_to_portfolio`
+- **Portfolio** — created via `create_portfolio` + `connect_project_to_portfolio` (NOT a regular board)
 
 **Work Management ↔ CRM wiring (the "deal-to-project" handoff):**
-- Won Deal in Opportunities → create a Project in Work Management
-- Project board → `board_relation` back to Account and Deal in CRM
+- Won Deal → create a Project in Work Management (most valuable cross-product flow)
+- Project board → link back to Account and Deal in CRM
 - Project milestones → Service tickets (issue tracking for deliverables)
 
 ---
 
 ### monday Projects (`project_management`) — Portfolio architecture
 
-`project_management` is a **layer on top of core boards**, not a separate workspace. Key facts:
-- **`create_project`** → generates TWO boards: parent project board + tasks board with 14-column native template
-- **`create_portfolio`** → generates a portfolio board with 11 native columns
-- **`connect_project_to_portfolio`** → takes the **tasks board ID** (lower-numbered of the pair), NOT the parent project board ID
-- Portfolio `mirror` columns auto-rollup `project_status` and `project_timeline` from all connected tasks boards
+`project_management` is a **layer on top of core boards**, not a separate workspace. It adds:
+- **`create_project`** → generates TWO boards: a parent project board + a tasks board with a 14-column native template
+- **`create_portfolio`** → generates a portfolio board with 11 native columns (health, progress mirror, timeline mirror, etc.)
+- **`connect_project_to_portfolio`** → takes the **tasks board ID** (lower-numbered), not the parent project board ID
 
-Portfolio native columns: `portfolio_project_owner` (people), `portfolio_project_rag` (At risk/On track/Off track), `portfolio_project_progress` (mirror — rollup of project_status), `portfolio_project_priority` (Critical/High/Medium/Low), `portfolio_project_step` (Upcoming/In progress/Completed), `portfolio_project_planned_timeline` (timeline), `portfolio_project_actual_timeline` (mirror — rollup of project_timeline), `portfolio_project_doc` (doc), `portfolio_project_scope` (text), `portfolio_project_link` (board_relation to all connected projects).
+Portfolio board native columns: `portfolio_project_owner` (people), `portfolio_project_rag` (status: At risk/On track/Off track), `portfolio_project_progress` (mirror — auto-rollup of `project_status`), `portfolio_project_priority` (Critical/High/Medium/Low), `portfolio_project_step` (Upcoming/In progress/Completed), `portfolio_project_planned_timeline` (timeline), `portfolio_project_actual_timeline` (mirror — rollup of `project_timeline`), `portfolio_project_doc` (doc), `portfolio_project_scope` (text), `portfolio_project_link` (board_relation to all connected projects).
 
 ---
 
-### monday Marketer (`marketing_campaigns` workspace) — native board set
+### monday Marketer (`marketing_campaigns` workspace)
 
-Always check `workspace_info` first — provisioning varies by account:
+Native board set (varies by account — always check `workspace_info` first):
 
 | Board | `item_terminology` | Key columns | Purpose |
 |---|---|---|---|
-| **Campaigns** | `Campaign` | `status` (Planning/Active/Completed/Paused), `owner` (people), `timeline` (timeline), `budget` (numbers $), `channel` (dropdown: Email/Social/Paid/Event/etc.), `target_audience` (text) | Campaign pipeline |
+| **Campaigns** | `Campaign` | `status` (Planning/Active/Completed/Paused), `owner` (people), `timeline` (timeline), `budget` (numbers $), `channel` (dropdown), `target_audience` (text) | Campaign pipeline |
 | **Content Calendar** | `Content` | `status`, `channel` (dropdown), `publish_date` (date), `assignee` (people), `campaign` (board_relation → Campaigns) | Editorial calendar — use Calendar view |
-| **Briefs** | `Brief` | `status`, `campaign` (board_relation → Campaigns), `assignee` (people), `due_date` (date), `doc` (direct_doc — brief content) | Creative brief with embedded Doc |
-| **Assets** | `Asset` | `file` (file), `status`, `campaign` (board_relation) | Creative asset management |
+| **Briefs** | `Brief` | `status`, `campaign` (board_relation → Campaigns), `assignee` (people), `due_date` (date) | Creative brief + Doc column for brief content |
+| **Assets** | `Asset` | `file` (file column), `status`, `campaign` (board_relation) | Creative asset management |
 
 **Marketer ↔ CRM wiring:**
 - Campaigns link to CRM Accounts (target accounts for ABM campaigns)
-- Campaign lead-capture Forms → submissions flow into CRM Leads board
-- Campaign performance dashboards pull from both Campaigns board + CRM pipeline data
+- Campaign leads → CRM Leads board (form submissions flow in)
+- Campaign performance dashboards pull from both Campaigns board + CRM deal data
 
 ---
 
 ### Cross-product architecture: the full monday flywheel
 
-The most powerful monday build shows all products as a single connected system. The canonical end-to-end flow:
+The most powerful monday demos show how all products form a single connected system. The standard end-to-end flow:
 
 ```
-[Marketer] Campaign → Lead capture Form
-         ↓
-[CRM] Lead → qualified → Contact + Account → Opportunity (Deal)
-         ↓ (Deal Won)
-[Core/Projects] Project created → tasks assigned → milestones tracked
-         ↓
-[Dev] Customer feedback → Product backlog → Sprint (feature delivered)
-         ↓
+[Marketer] Campaign → Lead Form
+        ↓
+[CRM] Lead → Contact → Account → Opportunity (Deal)
+        ↓ (Deal Won)
+[Core/Projects] Project created → tasks assigned → milestones
+        ↓
+[Dev] Feature requests from customer → Product backlog → Sprint
+        ↓
 [Service] Support ticket → resolved → linked back to Account
-         ↓
-[CRM] Account Value updated via mirror → renewal Opportunity created
+        ↓
+[CRM] Account Value updated via mirror → renewal opportunity created
 ```
 
-**How to wire it:**
-1. **CRM → Projects:** `board_relation` from Opportunities to Work Management project board. On deal win, create project item and link it back.
-2. **CRM → Service:** `board_relation` from Accounts to Tickets. `mirror` on Account shows open ticket count.
-3. **CRM → Dev:** `board_relation` from Customer Feedback to CRM Accounts — ARR-weighted feature prioritization.
-4. **Projects → Dev:** sprint task items link to project milestone items via `board_relation`.
-5. **All products → Dashboard:** build one cross-product exec dashboard — CRM pipeline funnel + open tickets + active sprint progress + project health — using NUMBER and CHART widgets sourced from boards across all workspaces.
+**How to wire it via MCP:**
+1. CRM → Projects: add a `board_relation` from Opportunities to a Work Management project board. When a deal is won, create a project item and link it.
+2. CRM → Service: add a `board_relation` from CRM Accounts to Tickets board. Use a `mirror` on Account to show open ticket count.
+3. Dev → CRM: Customer feedback board has a `board_relation` to CRM Accounts — enabling ARR-weighted feature prioritization.
+4. Projects → Dev: sprint tasks can link back to project milestones via `board_relation`.
+5. Any product → Dashboard: cross-product dashboards pull widgets from boards across all workspaces.
 
-**Dashboard as the cross-product lens:** dashboards are created in a workspace but widgets can source from boards in any workspace. Always build at least one cross-product dashboard for multi-product builds.
+**Dashboard as the cross-product lens:**
+Dashboards are workspace-scoped in creation but widgets can pull from boards in any workspace. Always build at least one cross-product dashboard for demos: CRM pipeline funnel + open tickets + active sprints + project health — on a single dashboard.
 
 ---
 
-### Pre-build checklist (run this before writing any mutation)
+### Build checklist for any product build
 
-- [ ] `get_user_context` — confirm which products are enabled
-- [ ] `list_workspaces` — find the workspace for each product
-- [ ] `workspace_info(id)` for each target workspace — find existing native boards
-- [ ] For each entity needed: use existing board, modify if needed, create only if absent
-- [ ] All new boards go in the correct product workspace, inside a named folder
-- [ ] Cross-product flows get `board_relation` columns wiring the relevant boards together
-- [ ] At least one cross-product dashboard showing the end-to-end flow
+Before writing any mutation:
+
+- [ ] `get_user_context` — confirm which products are enabled on this account
+- [ ] `list_workspaces` — find the workspace for each product you'll build in
+- [ ] `workspace_info(workspace_id)` for each target workspace — find existing native boards
+- [ ] For each entity you need: use existing board if present, create only if absent
+- [ ] Place new boards in the correct product workspace, organised into folders
+- [ ] Wire cross-product `board_relation` columns for any flow that spans products
+- [ ] Build a cross-product dashboard showing the full flow
 
 ---
 
@@ -293,19 +300,9 @@ The most powerful monday build shows all products as a single connected system. 
 
 ### CRITICAL: Match product kind to the correct existing workspace
 
-**Before creating any board, you MUST identify the right workspace for the chosen product kind.** Do NOT create a generic `open` workspace and build everything there.
+**Before creating any board, you MUST identify the right workspace for the chosen product kind.** Do NOT create a generic `open` workspace and build everything there. Follow the 8-step Required Workflow in §1.5 — it covers workspace identification, native-board discovery, and the two STOP cases.
 
-**Required pre-build workflow:**
-
-1. Call `list_workspaces` to get all workspaces on the account.
-2. For each candidate workspace, call `workspace_info(workspace_id)` or use raw GraphQL to read its `kind` field — but the key signal is the workspace **name** and any boards already inside it.
-3. Match the target product kind to the workspace that was provisioned for that product:
-   - CRM boards (`leads`, `deals`, `contacts`, `accounts`, `pipeline`) → find the workspace named "CRM", "Sales", or containing native CRM boards. **Do NOT use a Work Management / `core` workspace.**
-   - Dev boards (`sprints`, `epics`, `bugs`) → find the workspace named "Dev", "R&D", "Engineering", or containing sprint boards.
-   - Service boards (`tickets`, `SLA`) → find the workspace named "Service", "Support".
-   - Work Management boards (`tasks`, `projects`, `ops`) → find the `core` workspace.
-4. **If a matching workspace already exists, build inside it.** Pass `workspace_id` to `create_board`.
-5. Only create a new workspace if none exists for that product kind. When creating, name it to match the product (e.g. "CRM", "Dev", "Service") — don't use a generic name.
+Quick reference: CRM boards → "CRM" workspace; Dev boards → "Dev" workspace; Service boards → "Service" workspace; Work Management → `core` workspace (typically "Main workspace"). Pass `workspace_id` to `create_board`.
 
 **Anti-pattern to refuse:** building CRM, Dev, or Service boards inside the default Work Management workspace. monday.com maintains product-specific workspaces with native context (column templates, views, integrations). Boards placed in the wrong workspace lose that context and are harder for end-users to find.
 
@@ -665,7 +662,7 @@ Best practices:
 1. CRM pipeline on a `core` board with a Status column — use `crm`.
 2. Creating a new Leads / Contacts / Accounts / Deals / Activities board from scratch when the native CRM workspace already has one — call `workspace_info` on the CRM workspace first, find the existing board, and seed it. Same applies to Dev sprints, Service tickets, and Marketing campaigns.
 3. "Portfolio" built from a regular board + manual mirrors — use Projects/Portfolios (`create_project`, `create_portfolio`, `connect_project_to_portfolio`).
-3. Related-item ID stored in a `text` column — use `board_relation` + `mirror`.
+4. Related-item ID stored in a `text` column — use `board_relation` + `mirror`.
 4. Refusing a widget without checking `all_widgets_schema`. (And don't promise widget types not in the verified catalog: only `NUMBER`, `CHART`, `BATTERY`, `CALENDAR`, `GANTT`, `LISTVIEW`, `APP_FEATURE`.)
 5. `change_item_column_values` payload written from memory — call `get_column_type_info` first.
 6. Using `column_type: "person"` — deprecated, use `people`.
@@ -687,16 +684,15 @@ Best practices:
 22. Creating reusable status/dropdown labels per board — use **managed columns**.
 23. Hardcoding "Done" string for a Battery widget — pass via `done_text` (supports per-language).
 24. Ignoring `complexity` errors and retrying with the same query — paginate or trim selection.
-25. Writing to a `board_relation` column without first calling **`link_board_items_workflow`** — it's a required precondition; skipping it causes failures.
-26. Calling `change_item_column_values` with a new status/dropdown label without `createLabelsIfMissing: true` — call fails with `ColumnValueException`.
-27. Calling `get_full_board_data` directly — it's marked internal-only (UI-triggered). Use `get_board_info` + paginated `get_board_items_page` instead.
-28. Promising "portfolio kind" boards via `create_board` — that enum has only `public/private/share`. Portfolios are Projects (`create_project` → `create_portfolio` → `connect_project_to_portfolio`).
-29. Replacing whole docs to make small edits — use `create_doc_block` / `update_doc_block` / `delete_doc_block` for granular updates.
-30. Creating a webhook via raw GraphQL when `create_webhook` mutation exists.
-31. Permanently deleting items/boards/groups when archive is appropriate — prefer `archive_item` / `archive_board` / `archive_group` (reversible) over `delete_*`.
-32. Creating a status/dropdown column on a board you intend to share label semantics across — use `attach_status_managed_column` / `attach_dropdown_managed_column` (linked to a managed column) instead of `create_status_column` / `create_dropdown_column` (board-local).
-33. Confusing `backfill_items` with `ingest_items` — backfill is for one-time data migration (no side-effects, 20k rows); ingest is for ongoing integrations (full side-effects, 10k rows).
-34. Citing error codes from memory in user-facing diagnostics — read the actual `error_code` from the API response.
+25. Calling `change_item_column_values` with a new status/dropdown label without `createLabelsIfMissing: true` — call fails with `ColumnValueException`.
+26. Calling `get_full_board_data` directly — it's marked internal-only (UI-triggered). Use `get_board_info` + paginated `get_board_items_page` instead.
+27. Promising "portfolio kind" boards via `create_board` — that enum has only `public/private/share`. Portfolios are Projects (`create_project` → `create_portfolio` → `connect_project_to_portfolio`).
+28. Replacing whole docs to make small edits — use `create_doc_block` / `update_doc_block` / `delete_doc_block` for granular updates.
+29. Creating a webhook via raw GraphQL when `create_webhook` mutation exists.
+30. Permanently deleting items/boards/groups when archive is appropriate — prefer `archive_item` / `archive_board` / `archive_group` (reversible) over `delete_*`.
+31. Creating a status/dropdown column on a board you intend to share label semantics across — use `attach_status_managed_column` / `attach_dropdown_managed_column` (linked to a managed column) instead of `create_status_column` / `create_dropdown_column` (board-local).
+32. Confusing `backfill_items` with `ingest_items` — backfill is for one-time data migration (no side-effects, 20k rows); ingest is for ongoing integrations (full side-effects, 10k rows).
+33. Citing error codes from memory in user-facing diagnostics — read the actual `error_code` from the API response.
 
 ---
 
@@ -733,7 +729,7 @@ When the plan is approved, execute in this order to avoid forward-references:
 4. Columns per board (including `board_relation`).
 5. `mirror` columns (after `board_relation` exists on both sides).
 6. Groups.
-7. Seed items + initial column values. **Before any write to a `board_relation` column, call `link_board_items_workflow` first.** Use `createLabelsIfMissing: true` if seeding new status/dropdown labels.
+7. Seed items + initial column values. Use `createLabelsIfMissing: true` if seeding new status/dropdown labels. `board_relation` writes (`{"item_ids": [...]}`) work directly — no precondition call needed.
 8. Views (`create_view`).
 9. Forms (board must exist).
 10. Docs.
@@ -837,7 +833,7 @@ This skill is most often used to build **demo accounts** — fully-loaded accoun
 3. Pick one demo workspace per scenario. Use `WorkspaceKind: open`. Name it explicitly — `[DEMO] <Scenario>` so it's obvious in lists.
 4. Folders by domain inside the demo workspace.
 5. Boards with full column sets, real-feel names. **Always seed at least 8–15 items per board** — this is the threshold below which dashboards/widgets look fake.
-6. Cross-board links (`link_board_items_workflow` → `change_item_column_values` for `board_relation` cells).
+6. Cross-board links — `change_item_column_values` with `{"item_ids": [...]}` for `board_relation` cells. No precondition call needed.
 7. At least one Doc per scenario (project brief, meeting notes, runbook) — populate it with `create_doc` + `create_doc_blocks` (≤25 blocks per call). Demos lose credibility when "Documents" is empty.
 8. At least one Form per scenario where intake makes sense (lead capture, support ticket, request form).
 9. Dashboard with **multiple widget types** mixed (one NUMBER, one CHART, one BATTERY, one CALENDAR/GANTT) so the dashboard isn't monotone.

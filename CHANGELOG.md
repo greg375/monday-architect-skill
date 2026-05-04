@@ -2,6 +2,17 @@
 
 All notable changes to the monday-architect skill will be documented here.
 
+## [2026-05-04-patch6] — contradiction fixes and account-specificity caveat
+
+### Fixed
+- **`link_board_items_workflow` contradiction resolved** — removed from §0 introspection table, §22 anti-pattern list, §24 execution step 7, and §26 demo sequence step 6. All four locations previously told Claude to call this non-existent tool as a required precondition before writing `board_relation` columns. §5 and §25 already correctly stated it is not callable and not needed; now the skill is consistent throughout.
+- **§22 duplicate numbering** — two items were numbered "3"; renumbered all items from 4 onwards to restore sequential ordering.
+- **§1.5 Service section inconsistency** — the "When building Service" schema table previously ended with "create the Tickets board in the Service workspace", contradicting the Case 2 stop rule above it. Now correctly instructs Claude to stop and tell the user to initialise via the UI's "Get started" flow.
+- **§2 workspace workflow consolidation** — removed the redundant 5-step pre-build workflow that duplicated §1.5's 8-step Required Workflow; §2 now defers to §1.5 with a quick reference summary.
+
+### Added
+- **Account-specific column ID caveat** in CRM section — `connect_boards41` / `connect_boards4` are auto-generated IDs that vary per account; `contact_*`, `deal_*`, `activity_*`, `lead_*` prefixes are stable native conventions. Always resolve actual column IDs via `workspace_info` + `get_board_info`.
+
 ## [2026-05-04-patch5] — two-case stop rule for missing product workspaces
 
 ### Added
