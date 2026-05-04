@@ -2,6 +2,23 @@
 
 All notable changes to the monday-architect skill will be documented here.
 
+## [2026-05-04-patch3] — full cross-product architecture + product-not-enabled stop rule
+
+### Changed
+- §1.5 completely rewritten as a comprehensive cross-product architecture reference covering all 7 products.
+
+### Added
+- **CRM:** verified native board set with exact column IDs, `item_terminology`, status label values, and full relationship wiring map (Leads↔Contacts↔Accounts↔Opportunities deduplication triangle, Activities log, post-sale Onboarding/Finance/Legal links).
+- **Dev:** verified native boards from live account: Feature request, Product backlog (with backlog_impact/effort/priority columns), Customer feedback, Quarterly goals, PRD template. Sprint pair system documented (how `task_sprint` works, cross-pair failure mode, `get_monday_dev_sprints_boards` usage).
+- **Service:** noted that workspace may be empty on some accounts; documented Tickets + Knowledge Base schema with correct column types; CRM wiring (Contacts + Accounts `board_relation` + mirror).
+- **Work Management:** core patterns (projects, tasks, OKR, portfolio); deal-to-project handoff pattern.
+- **Projects/Portfolio:** `create_project` two-board fact; `connect_project_to_portfolio` takes tasks board ID; portfolio 11-column native schema.
+- **Marketer:** Campaigns/Content Calendar/Briefs/Assets board set with CRM wiring.
+- **Full flywheel diagram:** canonical end-to-end Marketer → CRM → Work Management → Dev → Service → CRM renewal flow with wiring instructions.
+- **Pre-build checklist:** 7-step mandatory checklist before writing any mutation.
+- Core rule elevated: "always use native boards — modify, don't recreate."
+- **STOP rule:** if a required product is not enabled or its workspace is missing, the skill now stops and gives the user the exact Administration → Products steps to enable it rather than building generic substitute boards. Covers all 6 products with workspace name mapping.
+
 ## [2026-05-04-patch2] — native board catalog + search-before-build rule
 
 ### Added
