@@ -2,6 +2,29 @@
 
 All notable changes to the monday-architect skill will be documented here.
 
+## [2026-05-05-patch7] — cross-product build findings (boardIds, sprint template, update_board)
+
+Verified end-to-end during a full 4-product (CRM + Service + Dev + Campaigns) demo build on 2026-05-05. Six concrete API facts that contradicted or were missing from the skill.
+
+### Added
+- **§5 — `board_relation.boardIds` cannot be set via API.** New CRITICAL subsection. `update_column(settings: JSON)` rejects every realistic payload with "Column schema validation failed"; `change_column_metadata.column_property` only accepts `title` and `description`; no other mutation in the schema configures linked boards on a `board_relation` column. The user must configure boardIds in the UI (column header → Settings → Connect boards). After UI config, `{"item_ids": [...]}` writes succeed normally. Native columns (`contact_account`, `task_sprint`, `bug_tasks`, etc.) ship pre-wired and don't hit this. Workaround pattern documented: create column → STOP → list (board, column, target board) triples for user → wait for confirmation → write item links.
+- **§1.5 — monday Dev TWO native variants.** Split the Dev section into "Variant A — Simple" (Feature request / Product backlog / Customer feedback / Quarterly goals / PRD template) and "Variant B — Sprint Template" (Sprints / Tasks / Epics / Bugs Queue / Retrospectives / Capacity). Variant B is provisioned via the UI Sprint template, NOT via API. All native column IDs and pre-wired `board_relation` columns documented for both variants.
+- **§6 — `update_board` documentation.** Args: `board_id, board_attribute, new_value`. Returns bare JSON — NO `{ id }` selection. `BoardAttributes` enum includes `description`, `name`. Multiple updates in one document need GraphQL aliases.
+- **§24 — Execution-order step 7: STOP for boardIds UI handoff.** Renumbered §24 to 15 steps; new explicit step between column creation and item seeding requires Claude to list every (board, column, target board) triple for user UI configuration.
+- **§24 — `update_board_hierarchy` documentation.** Args: `board_id, attributes: { workspace_id?, folder_id? }`. Response type `UpdateBoardHierarchyResult { success, message, board }` — NO `id` or `errors` fields. The right tool for moving boards between workspaces or folders mid-build.
+- **§3.7 — When to put Campaigns inside the CRM workspace.** New architectural note: for SMB demos where marketing is sourced from CRM Accounts/Leads, a `[Campaigns & Marketing]` folder inside the CRM workspace is cleaner than a separate `marketing_campaigns` workspace.
+- **§22 — three new anti-patterns (#35–#37):** promising to wire a new `board_relation` without UI assistance; promising `create_sprint` to provision the engineering sprint board set; selecting `{ id }` on `update_board`.
+- **§25 — Round-3 findings cheatsheet:** 11-bullet section consolidating this session's gotchas — boardIds API limitation, missing `create_sprint` mutation, `update_board` bare JSON, `update_board_hierarchy` response shape, `change_column_metadata` enum, `update_column(settings)` validator behavior, harness-blocked `delete_workspace`, mirror columns reading "unsupported" via API, CRM native `board_relation` reads returning null on some accounts, form auto-creating a Name question, no widget read/delete API.
+
+### Fixed
+- **§13 — Removed false `create_sprint` claim.** That mutation is not in the API schema as of `2026-07`. Replaced with explicit warning that engineering sprint board set is UI-only (Sprint template) and cross-reference to §1.5 Variant B.
+- **§22 — Renumbering broken in patch6.** Two items shared "4." (related-item-ID-in-text and refusing-widget-without-checking-schema). Renumbered the entire list 1–37.
+- **§25 — `delete_workspace` claim updated.** Patch6 said "use raw GraphQL via `all_monday_api`". Verified that the MCP harness's Stage 2 safety classifier frequently blocks this mutation; the reliable fallback is UI deletion. The "cascades" note now qualifies "when it runs".
+- **§6 — `change_column_metadata` enum clarified.** `column_property` enum has only `title` and `description`. Added cross-reference to §5 for `board_relation.boardIds`.
+
+### Verification
+- Verified against API release `release_candidate 2026-07` end-to-end during a real cross-product demo build: created 4 workspaces, ~22 boards (mix of native CRM/Dev/Service + custom), ~140 items with cross-product `board_relation` links, 3 dashboards with NUMBER/CHART/BATTERY/CALENDAR/GANTT widgets, 3 Docs, 2 Forms.
+
 ## [2026-05-04-patch6] — contradiction fixes and account-specificity caveat
 
 ### Fixed

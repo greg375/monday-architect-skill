@@ -1,14 +1,14 @@
 ---
 name: monday-architect
 description: Use this skill ANY time the user is building, modifying, or reasoning about a monday.com account via the monday MCP connector — workspaces, boards, dashboards, docs, forms, items, columns, widgets, CRM pipelines, Dev sprints, projects/portfolios, Connect Boards / mirrors, formulas, automations/triggers, webhooks, audit logs, integrations, the marketplace, the Objects platform, doc blocks, or anything queryable through the monday GraphQL API. Acts as the operator's manual for the MCP connector and forces correct product/architecture choices. Trigger on any mention of monday.com, monday boards/dashboards/docs, leads/deals/CRM, sprints/epics, item linking, the `mcp__claude_ai_monday_com__*` tool prefix, or monday GraphQL.
-version: 2026-05-04-patch6
+version: 2026-05-05-patch7
 ---
 
 # monday.com architect — operator's manual
 
 You operate the monday.com MCP connector. The user expects builds that use native monday objects, correct typed schemas, and the full advanced API surface — not generic-board workarounds. This skill is your reference. Work through the relevant sections for the task at hand.
 
-> The API facts in this skill (product kinds, column types, board kinds, widget types, webhook events, dashboard visibility, mutation/query names, value shapes, error codes) were verified end-to-end against the monday GraphQL schema and the live MCP connector on **2026-05-04** against API release `release_candidate 2026-07`. Account-specific facts (board IDs, column IDs, group IDs, which products are enabled) MUST come from live MCP calls — never assume.
+> The API facts in this skill (product kinds, column types, board kinds, widget types, webhook events, dashboard visibility, mutation/query names, value shapes, error codes) were verified end-to-end against the monday GraphQL schema and the live MCP connector on **2026-05-05** against API release `release_candidate 2026-07`. Account-specific facts (board IDs, column IDs, group IDs, which products are enabled) MUST come from live MCP calls — never assume.
 >
 > **To re-verify against your own account and detect drift, run `/refresh-monday-skill`** (sister skill — same repo). Run it monthly, before high-stakes demos, or after any monday API release announcement.
 >
@@ -147,9 +147,13 @@ The CRM workspace provisions these boards. Every monday CRM account has them.
 
 ---
 
-### monday Dev (`software` workspace) — verified native board set
+### monday Dev (`software` workspace) — TWO native variants
 
-The Dev workspace provisions these boards (verified from live account):
+The Dev workspace can be initialised in two distinct ways depending on which template the user picks in the UI. **Both produce native boards. Identify which variant the account has via `workspace_info` before designing.**
+
+#### Variant A — "Simple" Dev setup (Feature-request-driven)
+
+Provisioned when the user picks the basic Dev template:
 
 | Board | `item_terminology` | Key columns | Purpose |
 |---|---|---|---|
@@ -159,20 +163,48 @@ The Dev workspace provisions these boards (verified from live account):
 | **Quarterly goals** | `Goal` | `person` (people/Owners), `numeric_*` (Q start/Q goal/Q current — all %), `formula_*` (% of goal achieved) | OKR/goal tracking with Goal progression + Hierarchy views |
 | **PRD template** | `item` | `files` (file) | Product requirements doc — uses FeatureBoardView (Doc app) |
 
-**Sprint system (Dev) — how it actually works:**
-- Sprints are created via `create_sprint` (raw GraphQL) which generates a **paired board set**: a "Sprints Metadata" board + a "Sprint Management" tasks board.
-- Query existing sprint pairs with `get_monday_dev_sprints_boards` — returns `{sprints_board, tasks_board}` pairs.
-- Add tasks to a sprint: set the `task_sprint` column on the tasks board to the sprint item ID from the Sprints Metadata board.
-- `task_sprint` is coupled to its paired sprints board only — cross-pair operations fail.
-- Use `get_sprints_metadata`, `get_sprint_summary` for sprint-level data.
-- **Do NOT create a generic board for sprint tracking** — use the native sprint pair.
+#### Variant B — "Sprint Template" setup (Engineering team)
 
-**Dev board relationships:**
-- Feature request → Product backlog: a "To prioritize" button moves requests → backlog items
-- Product backlog → Sprint: backlog features get pulled into sprints via `task_sprint`
-- Customer feedback → Product backlog: feedback informs backlog priority
-- Quarterly goals → Product backlog: goals link to epics/features in the backlog
-- **CRM → Dev link:** Customer feedback board connects CRM Accounts (ARR-weighted feature prioritization)
+Provisioned when the user adds the **sprint template** in the UI (`Workspace → Add → Templates → Sprint`). This is what most engineering teams actually want:
+
+| Board | `item_terminology` | Key columns | Purpose |
+|---|---|---|---|
+| **Sprints** | `Sprint` | `sprint_goals` (long_text), `sprint_timeline` (timeline), `sprint_start_date` / `sprint_end_date` (date), `sprint_capacity` (numeric), `sprint_tasks` (board_relation → Tasks), `sprint_activation` (status — `v` is Active), `sprint_completion` (checkbox) | Sprint container — one item per sprint |
+| **Tasks** | `Task` | `task_owner` (people), `task_status` (status), `task_priority` (status), `task_type` (status — Bug/Feature/Test), `task_estimation` / `task_actual_effort` (numeric — hours or points), `task_epic` (board_relation → Epics), `task_sprint` (board_relation → Sprints) | Sprint task list |
+| **Epics** | `Epic` | `epic_owner` (people), `timeline` (timeline), `epic_status` (status — In Progress/Planned/Backlog), `epic_priority` (status — Critical/High/Medium/Low), `epic_tasks` (board_relation → Tasks), `monday_doc_v2` (doc) | Quarterly epic planning |
+| **Bugs Queue** | `Bug` | `people1` (Reporter), `bug_status` (status — Open/In Progress/Done/Pending Deploy/etc), `priority_1` (status), `time_tracking` (Time until resolution), `bug_tasks` (board_relation → Tasks) | Bug intake & triage |
+| **Retrospectives** | `Retrospective` | (varies — typically `what_went_well`, `what_didnt`, `action_items`) | Sprint retro notes |
+| **Capacity** | `Capacity` | (varies — typically `person`, `available_hours`, `sprint_link`) | Per-person sprint capacity |
+| **Getting Started** | (doc) | — | Auto-generated walkthrough doc |
+
+**⚠️ `create_sprint` mutation does NOT exist in API release `2026-07`.** Verified by full schema introspection. The skill has historically claimed this mutation creates the paired Sprints/Tasks boards — that is wrong for the current API.
+
+**The native sprint board set must be provisioned via the UI.** If the user wants engineering sprint workflow:
+1. Tell them to open the Dev workspace → Add → Templates → **Sprint** in the monday UI.
+2. Wait for them to confirm the boards exist.
+3. Then use `workspace_info` to get the auto-generated board IDs (Sprints, Tasks, Epics, Bugs Queue).
+4. Seed sprints by creating items on the **Sprints** board directly. Add tasks via `create_item` on the Tasks board with `task_sprint: {item_ids: [<sprint_item_id>]}` and `task_epic: {item_ids: [<epic_item_id>]}`.
+
+**Querying sprint state:**
+- `get_monday_dev_sprints_boards` — find sprint board pairs (works for both variants).
+- `get_sprints_metadata` — sprint definitions on a board.
+- `get_sprint_summary` — burnup/burndown/summary for a sprint.
+
+**Native cross-board wiring (sprint template):**
+- `task_sprint` (Tasks → Sprints): pre-wired with `boardIds` set
+- `task_epic` (Tasks → Epics): pre-wired
+- `epic_tasks` (Epics → Tasks): pre-wired (reverse side, auto-populated)
+- `bug_tasks` (Bugs Queue → Tasks): pre-wired
+- `sprint_tasks` (Sprints → Tasks): pre-wired (reverse side)
+
+These all ship with `boardIds` configured — you do NOT hit the §5 boardIds limitation when using these native columns. **Don't recreate them — use them.**
+
+**Dev board relationships (logical flow):**
+- Feature request → Product backlog (Variant A) OR Bugs Queue → Tasks (Variant B): the intake → work conversion
+- Product backlog / Tasks → Sprint: pulled in via `task_sprint`
+- Customer feedback / Bugs Queue → Tasks: feedback/bug informs sprint priority
+- Quarterly goals → Epics: goals link to epics in the active quarter
+- **CRM → Dev link:** Variant A uses Customer feedback ↔ CRM Accounts. Variant B has no built-in CRM link — add a `board_relation` from Bugs Queue or Tasks to CRM Accounts manually (and remember §5: the user must configure `boardIds` in the UI).
 
 ---
 
@@ -239,6 +271,8 @@ Native board set (varies by account — always check `workspace_info` first):
 - Campaigns link to CRM Accounts (target accounts for ABM campaigns)
 - Campaign leads → CRM Leads board (form submissions flow in)
 - Campaign performance dashboards pull from both Campaigns board + CRM deal data
+
+**When to put Campaigns inside the CRM workspace instead:** for SMB demos where the marketing team is the same people as the sales team, or where every campaign target list is sourced from the CRM Accounts/Leads, the cleanest setup is a `[Campaigns & Marketing]` folder **inside the CRM workspace** (not a separate Marketing workspace). This keeps the cross-board navigation natural — every Account is one click from the campaigns targeting it. Build a separate `marketing_campaigns` workspace only when the marketing team is functionally distinct (different users, different cadence, different reporting) — typical at companies of 50+ FTEs.
 
 ---
 
@@ -434,7 +468,27 @@ The single biggest design pitfall. Rules:
 4. Mirror columns are **read-only** and have filtering/aggregation limits in some widgets — design around this. If you need heavy filtering on a mirrored value, denormalize via a `formula` or an automation-populated column.
 5. For very large many-to-many relationships, use a join board.
 
-**Note on `link_board_items_workflow`:** The descriptions of `change_item_column_values` and `get_board_items_page` mention a `[REQUIRED PRECONDITION]` to call `link_board_items_workflow` for board-relation tasks — **but that tool is NOT exposed as a callable MCP tool, and writing/reading `board_relation` columns works fine without it (verified end-to-end in May 2026).** Treat the precondition note as legacy/aspirational documentation, not a real requirement.
+### ⚠️ CRITICAL: `board_relation.boardIds` CANNOT be set via API
+
+**This is the single most common surprise when building cross-product flows.** When you call `create_column(column_type: board_relation)`, the column is created with `settings_str: "{}"` — i.e. NO target boards configured. Until `boardIds` is set, **any write to that column will fail with "Internal Server Error"** and any read returns an empty array.
+
+**There is no API path to set `boardIds`** in API release `2026-07`. Verified exhaustively:
+
+- `update_column(settings: JSON)` accepts a `settings` argument that looks like it should work, but rejects every JSON shape attempted (`{"boardIds":[...]}`, `{"allowedValues":[...]}`, etc.) with `"Column schema validation failed"`.
+- `change_column_metadata` has a `column_property` enum with only two values: `title` and `description`. No `settings` / `boardIds` option.
+- No other mutation in the schema (`update_status_column`, `update_dropdown_column`, `change_column_title`, `connect_board_to_object_schema`, `create_object_relations`, etc.) configures the linked boards on a `board_relation` column.
+
+**The user MUST configure boardIds in the UI:** Click the column header → Settings → "Connect boards" → select the target board(s) → Save. After that, API writes (`{"item_ids": [...]}`) succeed normally.
+
+**Workaround when seeding a demo:**
+1. Create the `board_relation` column via API (just for the column to exist — names matter).
+2. **Stop and tell the user EXACTLY which columns need UI configuration**, e.g.:
+   > "I created the 'Recipient' column on Quotes & Invoices but couldn't connect it to the Contacts board via the API. **Click the column header → Settings → Connect boards → Contacts.** Once you do, message me and I'll wire all the items."
+3. After the user confirms UI config, write the `{"item_ids": [...]}` payloads.
+
+**Native `board_relation` columns work out of the box** — when you use a native CRM/Dev/Service workspace, columns like `contact_account`, `deal_contact`, `task_sprint`, `bug_tasks` ship with `boardIds` already configured. Only NEWLY-CREATED `board_relation` columns hit this limitation.
+
+**Note on `link_board_items_workflow`:** The descriptions of `change_item_column_values` and `get_board_items_page` mention a `[REQUIRED PRECONDITION]` to call `link_board_items_workflow` for board-relation tasks — **but that tool is NOT exposed as a callable MCP tool, and writing/reading `board_relation` columns works fine without it (verified end-to-end in May 2026), assuming `boardIds` is already configured per the rule above.** Treat the precondition note as legacy/aspirational documentation, not a real requirement.
 
 CRM-style schema example:
 - `Accounts` ← `Contacts` (board_relation on Contacts → Accounts; mirror Account Name back)
@@ -463,7 +517,8 @@ CRM-style schema example:
 - **Archive vs delete:** archive (reversible) preferred for user-facing data — `archive_board`, `archive_group`, `archive_item`. Use `delete_*` only when permanent removal is intended.
 - **Position / movement:** `change_item_position` (within group), `move_item_to_board` (move item across boards), `move_object` (relocate boards/docs/dashboards between workspaces or folders).
 - **Item description (rich-text body):** `set_item_description_content` accepts markdown; `add_content_to_doc_from_markdown` appends to a doc.
-- **Column structural changes:** `change_column_metadata`, `change_column_title`, `delete_column`, `add_required_column`, `remove_required_column`.
+- **Column structural changes:** `change_column_metadata`, `change_column_title`, `delete_column`, `add_required_column`, `remove_required_column`. **`change_column_metadata.column_property` is an enum with only `title` and `description`** — it does NOT expose column settings (e.g., `boardIds` for `board_relation`). For label/option updates use `update_status_column` / `update_dropdown_column`. For `board_relation.boardIds` see §5 — UI-only.
+- **Board-level metadata:** `update_board(board_id: ID!, board_attribute: BoardAttributes!, new_value: String!)` — the response is bare JSON, NOT a `Board` object, so do NOT add a `{ id }` selection (you'll get `Field "update_board" must not have a selection since type "JSON" has no subfields`). `BoardAttributes` enum includes `description`, `name`, etc. Multiple `update_board` calls in one mutation document need aliases (e.g. `a: update_board(...)`, `b: update_board(...)`).
 - **Dependency batching:** `batch_update_dependency_column` (≤50 items per batch).
 - **Bulk import jobs:** `backfill_items` (no side effects, ≤20k rows, for migrations) vs `ingest_items` (full side effects, ≤10k rows, for ongoing integrations). Each returns a job ID + upload URL; check status with `fetch_job_status`.
 - **Alternative single-value writes:** `change_column_value`, `change_simple_column_value`, `change_multiple_column_values` exist alongside `change_item_column_values` — use whichever matches the granularity needed.
@@ -567,6 +622,8 @@ If the user asks "automate X when Y happens", first decide:
 - Use Epics and Releases as native objects on `software` workspaces; don't reinvent them as Status options.
 - `enroll_items_to_sequence` (raw GraphQL mutation, verified name) — enroll items into a sequence; pre-check eligibility with the `allowed_sequences_to_enroll` query.
 
+> **Sprint provisioning is UI-only.** `create_sprint` is NOT in the API schema as of `2026-07`. To set up the native engineering board pair (Sprints + Tasks + Epics + Bugs Queue + Retrospectives + Capacity), the user must add the **Sprint template** in the monday UI (`Workspace → Add → Templates → Sprint`). See §1.5 "monday Dev — TWO native variants" for the full board structure of each variant.
+
 ---
 
 ## 14. Notetaker (meetings)
@@ -663,36 +720,39 @@ Best practices:
 2. Creating a new Leads / Contacts / Accounts / Deals / Activities board from scratch when the native CRM workspace already has one — call `workspace_info` on the CRM workspace first, find the existing board, and seed it. Same applies to Dev sprints, Service tickets, and Marketing campaigns.
 3. "Portfolio" built from a regular board + manual mirrors — use Projects/Portfolios (`create_project`, `create_portfolio`, `connect_project_to_portfolio`).
 4. Related-item ID stored in a `text` column — use `board_relation` + `mirror`.
-4. Refusing a widget without checking `all_widgets_schema`. (And don't promise widget types not in the verified catalog: only `NUMBER`, `CHART`, `BATTERY`, `CALENDAR`, `GANTT`, `LISTVIEW`, `APP_FEATURE`.)
-5. `change_item_column_values` payload written from memory — call `get_column_type_info` first.
-6. Using `column_type: "person"` — deprecated, use `people`.
-7. Sprint/epic structure on generic `core` boards — use `software` workspaces + sprint queries.
-8. Long-form narrative in a `long_text` column — use a Doc.
-9. Hand-rolled GraphQL via `all_monday_api` when a named tool exists.
-10. Form-style intake done via manual item creation — use a Form bound to the board.
-11. Per-item notification done via update text — use `create_notification`.
-12. Files dumped into a `long_text` column — use `file`.
-13. Assignee tracked as a name string — use `people` with real user IDs.
-14. Email/phone in plain `text` — use `email` / `phone` (enables click-to-email and dialer).
-15. Building everything in the workspace root — group with folders.
-16. Creating duplicates — `search` first.
-17. Monolithic boards with 30+ columns — split by domain and connect via `board_relation`.
-18. One dashboard per metric — group related KPIs onto one dashboard.
-19. Fetching all items to count them — use `aggregate` or `items_page_by_column_values`.
-20. Reading >500 items without pagination — use cursor with `next_items_page`.
-21. Promising "automation recipes via API" — recipe creation isn't exposed; use webhooks + `execute_integration_block` instead.
-22. Creating reusable status/dropdown labels per board — use **managed columns**.
-23. Hardcoding "Done" string for a Battery widget — pass via `done_text` (supports per-language).
-24. Ignoring `complexity` errors and retrying with the same query — paginate or trim selection.
-25. Calling `change_item_column_values` with a new status/dropdown label without `createLabelsIfMissing: true` — call fails with `ColumnValueException`.
-26. Calling `get_full_board_data` directly — it's marked internal-only (UI-triggered). Use `get_board_info` + paginated `get_board_items_page` instead.
-27. Promising "portfolio kind" boards via `create_board` — that enum has only `public/private/share`. Portfolios are Projects (`create_project` → `create_portfolio` → `connect_project_to_portfolio`).
-28. Replacing whole docs to make small edits — use `create_doc_block` / `update_doc_block` / `delete_doc_block` for granular updates.
-29. Creating a webhook via raw GraphQL when `create_webhook` mutation exists.
-30. Permanently deleting items/boards/groups when archive is appropriate — prefer `archive_item` / `archive_board` / `archive_group` (reversible) over `delete_*`.
-31. Creating a status/dropdown column on a board you intend to share label semantics across — use `attach_status_managed_column` / `attach_dropdown_managed_column` (linked to a managed column) instead of `create_status_column` / `create_dropdown_column` (board-local).
-32. Confusing `backfill_items` with `ingest_items` — backfill is for one-time data migration (no side-effects, 20k rows); ingest is for ongoing integrations (full side-effects, 10k rows).
-33. Citing error codes from memory in user-facing diagnostics — read the actual `error_code` from the API response.
+5. Refusing a widget without checking `all_widgets_schema`. (And don't promise widget types not in the verified catalog: only `NUMBER`, `CHART`, `BATTERY`, `CALENDAR`, `GANTT`, `LISTVIEW`, `APP_FEATURE`.)
+6. `change_item_column_values` payload written from memory — call `get_column_type_info` first.
+7. Using `column_type: "person"` — deprecated, use `people`.
+8. Sprint/epic structure on generic `core` boards — use `software` workspaces + sprint queries.
+9. Long-form narrative in a `long_text` column — use a Doc.
+10. Hand-rolled GraphQL via `all_monday_api` when a named tool exists.
+11. Form-style intake done via manual item creation — use a Form bound to the board.
+12. Per-item notification done via update text — use `create_notification`.
+13. Files dumped into a `long_text` column — use `file`.
+14. Assignee tracked as a name string — use `people` with real user IDs.
+15. Email/phone in plain `text` — use `email` / `phone` (enables click-to-email and dialer).
+16. Building everything in the workspace root — group with folders.
+17. Creating duplicates — `search` first.
+18. Monolithic boards with 30+ columns — split by domain and connect via `board_relation`.
+19. One dashboard per metric — group related KPIs onto one dashboard.
+20. Fetching all items to count them — use `aggregate` or `items_page_by_column_values`.
+21. Reading >500 items without pagination — use cursor with `next_items_page`.
+22. Promising "automation recipes via API" — recipe creation isn't exposed; use webhooks + `execute_integration_block` instead.
+23. Creating reusable status/dropdown labels per board — use **managed columns**.
+24. Hardcoding "Done" string for a Battery widget — pass via `done_text` (supports per-language).
+25. Ignoring `complexity` errors and retrying with the same query — paginate or trim selection.
+26. Calling `change_item_column_values` with a new status/dropdown label without `createLabelsIfMissing: true` — call fails with `ColumnValueException`.
+27. Calling `get_full_board_data` directly — it's marked internal-only (UI-triggered). Use `get_board_info` + paginated `get_board_items_page` instead.
+28. Promising "portfolio kind" boards via `create_board` — that enum has only `public/private/share`. Portfolios are Projects (`create_project` → `create_portfolio` → `connect_project_to_portfolio`).
+29. Replacing whole docs to make small edits — use `create_doc_block` / `update_doc_block` / `delete_doc_block` for granular updates.
+30. Creating a webhook via raw GraphQL when `create_webhook` mutation exists.
+31. Permanently deleting items/boards/groups when archive is appropriate — prefer `archive_item` / `archive_board` / `archive_group` (reversible) over `delete_*`.
+32. Creating a status/dropdown column on a board you intend to share label semantics across — use `attach_status_managed_column` / `attach_dropdown_managed_column` (linked to a managed column) instead of `create_status_column` / `create_dropdown_column` (board-local).
+33. Confusing `backfill_items` with `ingest_items` — backfill is for one-time data migration (no side-effects, 20k rows); ingest is for ongoing integrations (full side-effects, 10k rows).
+34. Citing error codes from memory in user-facing diagnostics — read the actual `error_code` from the API response.
+35. **Promising to "wire up" a NEW `board_relation` column without UI assistance** — `boardIds` cannot be set via API. Create the column, then stop and tell the user the exact UI clicks required. See §5.
+36. **Promising `create_sprint` to provision the engineering sprint board set** — that mutation is not in the schema. The user must add the Sprint template via the monday UI first. See §1.5 / §13.
+37. **Quoting the response of `update_board` with a `{ id }` selection** — the response is bare JSON, not a `Board` object. See §6.
 
 ---
 
@@ -726,17 +786,20 @@ When the plan is approved, execute in this order to avoid forward-references:
 1. Workspaces → folders.
 2. Managed columns (status/dropdown), if any are reusable across boards.
 3. Boards (parents before children of `board_relation` relationships).
-4. Columns per board (including `board_relation`).
+4. Columns per board (including `board_relation`). **For NEW `board_relation` columns, the `boardIds` setting is empty after creation — see step 7.**
 5. `mirror` columns (after `board_relation` exists on both sides).
 6. Groups.
-7. Seed items + initial column values. Use `createLabelsIfMissing: true` if seeding new status/dropdown labels. `board_relation` writes (`{"item_ids": [...]}`) work directly — no precondition call needed.
-8. Views (`create_view`).
-9. Forms (board must exist).
-10. Docs.
-11. Dashboards + widgets (boards must exist with data for widgets to be meaningful).
-12. Webhooks / integrations / automation triggers.
-13. Notifications / sharing.
-14. Verify with `get_board_info` + paginated `get_board_items_page` / `board_insights` / `aggregate` before reporting done. (Do NOT use `get_full_board_data` — internal-only.)
+7. **STOP if any `board_relation` columns were created in step 4** — list every (board, column, target board) triple and ask the user to configure `boardIds` in the UI (column header → Settings → Connect boards). Without this, item-level link writes fail. Native columns (`contact_account`, `task_sprint`, `bug_tasks`, etc.) ship pre-wired and don't need this step. See §5.
+8. Seed items + initial column values. Use `createLabelsIfMissing: true` if seeding new status/dropdown labels. `board_relation` writes (`{"item_ids": [...]}`) work — once `boardIds` is set per step 7.
+9. Views (`create_view`).
+10. Forms (board must exist).
+11. Docs.
+12. Dashboards + widgets (boards must exist with data for widgets to be meaningful).
+13. Webhooks / integrations / automation triggers.
+14. Notifications / sharing.
+15. Verify with `get_board_info` + paginated `get_board_items_page` / `board_insights` / `aggregate` before reporting done. (Do NOT use `get_full_board_data` — internal-only.)
+
+**Moving boards between folders/workspaces:** use `update_board_hierarchy(board_id: ID!, attributes: { workspace_id?: ID, folder_id?: ID })`. Returns `UpdateBoardHierarchyResult { success, message, board }` — no `id` field. Verified working — this is the right tool for re-organizing demo workspaces (e.g. moving a Campaigns board from a separate Marketing workspace into a CRM workspace folder mid-build). `move_object` works for boards too but `update_board_hierarchy` is more explicit.
 
 If a step fails, fix the root cause — don't paper over with a `text`-column workaround.
 
@@ -765,14 +828,15 @@ These are the things that bit during a real end-to-end build. Read this before y
 - **`create_doc_blocks` shape:** `{text_block: {delta_format: [{insert: {text: "..."}}]}}`. Args are `docId` + `blocksInput`. Max 25 blocks per call.
 - **`create_project` is async.** Returns `process_id`; the actual `project_id` arrives via callback URL or by polling. Plan for the latency.
 - **`create_portfolio` doesn't return a board ID.** Query `boards(workspace_ids: [...])` after to find the new portfolio board.
-- **`delete_workspace` cascades.** Deleting the workspace removes all its boards, items, dashboards, docs, forms, projects, portfolios, subitem-boards, columns, groups, and updates in one call. Useful for demo cleanup.
+- **`delete_workspace` cascades** — *when it runs.* When the API actually executes the mutation, it removes all boards, items, dashboards, docs, forms, projects, portfolios, subitem-boards, columns, groups, and updates in one call. Useful for demo cleanup. **But** the MCP harness's Stage 2 safety classifier frequently blocks this mutation; have the user delete the workspace via the monday UI as the reliable fallback.
 
 ### MCP tool quirks
 - **`get_full_board_data` is internal-only.** Even though it appears in the tool list, its description says it's UI-triggered only. Use `get_board_info` + paginated `get_board_items_page` instead.
-- **`link_board_items_workflow` is referenced as a precondition but is NOT a callable tool.** Writing to `board_relation` columns works fine without it. Treat the precondition note in `change_item_column_values` and `get_board_items_page` as legacy documentation.
+- **`link_board_items_workflow` is referenced as a precondition but is NOT a callable tool.** Writing to `board_relation` columns works fine without it (assuming `boardIds` is set per §5). Treat the precondition note in `change_item_column_values` and `get_board_items_page` as legacy documentation.
 - **`create_subitem` is NOT a top-level MCP tool.** Use `create_item` with `parentItemId`. (The raw GraphQL `create_subitem` mutation does exist.)
-- **No `delete_workspace` MCP tool either.** Use raw GraphQL via `all_monday_api`.
+- **No `delete_workspace` MCP tool either** — and the raw GraphQL mutation is **frequently blocked by the MCP harness's safety classifier** ("Stage 2 classifier — permission denied"). When you need to delete a workspace and the harness blocks it, tell the user to delete it via the UI (sidebar → right-click → Delete workspace) rather than retrying.
 - **Webhook creation may be sandbox-blocked.** In some environments, creating webhooks pointed at external URLs (even `example.com`) is blocked by tooling-level guardrails. The API itself accepts the call; the harness denies it. Tell the user the URL/event combination you'd create rather than failing silently.
+- **`board_relation.boardIds` cannot be set via API at all.** See §5. The `update_column(settings: JSON)` and `change_column_metadata` paths both fail. Plan for a UI handoff step in the build sequence whenever you create a new `board_relation` column.
 
 ### Errors
 - **`ColumnValueException`** is the standard error for bad column values. The error response includes `extensions.error_data` with `column_validation_error_code` (e.g. `missingLabel` for an unrecognized status label). `createLabelsIfMissing: true` is the fix for the `missingLabel` case.
@@ -805,6 +869,20 @@ These are the things that bit during a real end-to-end build. Read this before y
 - **`validations(id: ID!)`** — the arg is named `id`, not `board_id`, but takes the board ID.
 - **`pin_to_top`, `like_update`, `unlike_update` etc. all use `id` arg** — not entity-specific names.
 - **Update mentions render as embedded HTML `<a class="user_mention_editor router">` tags** in the body when read back. Pass them via `mentionsList: '[{"id":"...","type":"User"}]'`.
+
+### Round-3 findings (cross-product demo build, May 2026)
+
+- **`board_relation.boardIds` is API-unsettable.** No mutation in `2026-07` configures the linked boards on a `board_relation` column — confirmed exhaustively (see §5). Any newly-created `board_relation` column is a UI-handoff item.
+- **`create_sprint` is not in the schema.** Native engineering sprint board pair (Sprints/Tasks/Epics/Bugs Queue/Retrospectives/Capacity) must be provisioned via UI sprint template. See §1.5 / §13.
+- **`update_board` returns bare JSON.** Args: `board_id, board_attribute, new_value`. NO `{ id }` selection — fails with `must not have a selection since type "JSON" has no subfields`. Multiple updates in one document need GraphQL aliases.
+- **`update_board_hierarchy` is the right tool for moving boards between workspaces or folders.** Args: `board_id, attributes: { workspace_id?, folder_id? }`. Response type is `UpdateBoardHierarchyResult { success, message, board }` — NO `id` or `errors` fields. Use this when restructuring demo workspaces mid-build.
+- **`change_column_metadata.column_property` enum has only 2 values:** `title`, `description`. Don't try to use this to set column settings.
+- **`update_column(settings: JSON)` exists but rejects every realistic payload.** The schema lists the arg; the validator rejects `boardIds`, `allowedValues`, etc. with `Column schema validation failed`. Effectively read-only for type-specific settings post-creation.
+- **`delete_workspace` is harness-blocked** (Stage 2 classifier). Hand off to UI deletion.
+- **`mirror` columns return `"Column value type is not supported"` when read via `get_board_items_page`** — even though they render correctly in the UI. Don't panic when a mirror reads as that string; verify visually in the UI instead.
+- **CRM native `board_relation` reads return `null` via API even when set.** `deal_contact`, `account_contact`, etc. populate correctly in the UI but `get_board_items_page` returns null arrays for those columns on some accounts. The data IS there — UI is the source of truth for these specific native columns.
+- **"Form auto-creates a Name question."** When you call `create_form`, the backing board comes pre-seeded with a `Name` question (id: `name`, type: `Name`). Trying to `create` another Name question fails with `ExceededUniqueQuestionTypeCount`. To customize, use `form_questions_editor(action: "update", questionId: "name", ...)` instead.
+- **Widget API has NO read/list/delete endpoint.** `create_widget` is one-way. There is no `widgets` query, no `delete_widget` mutation accessible to the MCP. To remove a broken widget, you must delete it via the dashboard UI. Plan for this when widgets reference deleted boards (their references stay broken until manually removed).
 
 ### Data shapes seen on the wire
 - `boards.columns[].settings_str` is a JSON-encoded string — parse to inspect a column's actual stored config.
