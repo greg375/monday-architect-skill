@@ -2,6 +2,42 @@
 
 All notable changes to the monday-architect skill will be documented here.
 
+## [2026-05-05-patch8] — `create_column.defaults` correction (board_relation IS API-wirable)
+
+Patch7 incorrectly stated that `board_relation.boardIds` could not be set via the API. **It can — via the `defaults: JSON` argument on `create_column` (raw GraphQL).** Verified end-to-end on `2026-07` by wiring 14 cross-product `board_relation` columns and 27 item-level links during a single demo build.
+
+### Fixed
+
+- **§5 — `board_relation.boardIds` is settable at creation.** The correct mutation:
+  ```graphql
+  mutation {
+    create_column(
+      board_id: 12345,
+      title: "Customer Account",
+      column_type: board_relation,
+      defaults: "{\"boardIds\":[67890],\"allowCreateReflectionColumn\":true}"
+    ) { id title settings_str }
+  }
+  ```
+  Returned `settings_str` confirms wiring: `"{\"boardIds\":[67890],\"allowCreateReflectionColumn\":true}"`. Subsequent `change_multiple_column_values` writes with `{"item_ids": [...]}` succeed immediately. **Use raw GraphQL via `all_monday_api`** — the MCP `create_column` tool wrapper exposes `columnSettings` (column-type config like status labels), not the `defaults` arg.
+- **§5 — Mandatory column workaround.** Some native `board_relation` columns (e.g. `bill_to` on Quotes & Invoices, `board_relation6` on the ITSM Tickets template) are mandatory and cannot be deleted. When you encounter one with empty `boardIds`, add a NEW supplementary `board_relation` column alongside it via `create_column.defaults`. The mandatory empty column stays as a UI artifact; your new column carries the data.
+- **§5 — `update_column(settings)` and `change_column_metadata` cannot set `boardIds` AFTER creation.** Both still rejected: `update_column.settings` returns `Column schema validation failed`; `change_column_metadata.column_property` enum exposes only `title` and `description`. So either set boardIds at creation or delete + recreate.
+- **§22 #35 — Inverted.** Was: "promising to wire a new `board_relation` without UI assistance". Now: "creating a `board_relation` column with empty boardIds and asking the user to wire it in the UI — wrong, use `create_column.defaults` instead".
+- **§24 step 7 — Inverted.** Was a STOP for UI handoff. Now: "for every `board_relation` column you create, use raw GraphQL `create_column` with `defaults: \"{\\\"boardIds\\\":[<target>]}\"`". Native columns ship pre-wired; only NEW columns need the `defaults` arg.
+- **§25 round-3 finding — Reversed.** Patch7 cheatsheet claimed boardIds was unsettable; patch8 corrects with the working mutation and notes `update_column` is still broken.
+
+### Verification
+
+- Wired 14 cross-product `board_relation` columns end-to-end via `create_column.defaults`:
+  - Native ITSM Tickets → CRM Accounts (`Customer Account`)
+  - Native ITSM Tickets → CRM Contacts (`Customer Contact`)
+  - CRM Contacts → ITSM Tickets (`Open Tickets`, reverse, `allowCreateReflectionColumn:false` to break the chain)
+  - Quotes & Invoices → CRM Contacts (`Recipient Contact` — supplementary, since native `bill_to` is mandatory and empty)
+  - Campaigns → CRM Accounts (`Target Accounts`)
+  - Campaigns → CRM Leads (`Leads Generated`)
+  - Content Calendar → Campaigns (`Campaign`)
+- 27 item-level links wired immediately via `change_multiple_column_values` after column creation, all in single batched mutations — no UI handoff needed.
+
 ## [2026-05-05-patch7] — cross-product build findings (boardIds, sprint template, update_board)
 
 Verified end-to-end during a full 4-product (CRM + Service + Dev + Campaigns) demo build on 2026-05-05. Six concrete API facts that contradicted or were missing from the skill.

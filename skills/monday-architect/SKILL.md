@@ -1,7 +1,7 @@
 ---
 name: monday-architect
 description: Use this skill ANY time the user is building, modifying, or reasoning about a monday.com account via the monday MCP connector — workspaces, boards, dashboards, docs, forms, items, columns, widgets, CRM pipelines, Dev sprints, projects/portfolios, Connect Boards / mirrors, formulas, automations/triggers, webhooks, audit logs, integrations, the marketplace, the Objects platform, doc blocks, or anything queryable through the monday GraphQL API. Acts as the operator's manual for the MCP connector and forces correct product/architecture choices. Trigger on any mention of monday.com, monday boards/dashboards/docs, leads/deals/CRM, sprints/epics, item linking, the `mcp__claude_ai_monday_com__*` tool prefix, or monday GraphQL.
-version: 2026-05-05-patch7
+version: 2026-05-05-patch8
 ---
 
 # monday.com architect — operator's manual
@@ -468,27 +468,53 @@ The single biggest design pitfall. Rules:
 4. Mirror columns are **read-only** and have filtering/aggregation limits in some widgets — design around this. If you need heavy filtering on a mirrored value, denormalize via a `formula` or an automation-populated column.
 5. For very large many-to-many relationships, use a join board.
 
-### ⚠️ CRITICAL: `board_relation.boardIds` CANNOT be set via API
+### ✅ Setting `boardIds` on `board_relation` columns — use `create_column.defaults`
 
-**This is the single most common surprise when building cross-product flows.** When you call `create_column(column_type: board_relation)`, the column is created with `settings_str: "{}"` — i.e. NO target boards configured. Until `boardIds` is set, **any write to that column will fail with "Internal Server Error"** and any read returns an empty array.
+**The single most under-documented mutation arg in the monday API.** `create_column` accepts a `defaults: JSON` argument that lets you set `boardIds` at column-creation time. Verified end-to-end on `2026-07`:
 
-**There is no API path to set `boardIds`** in API release `2026-07`. Verified exhaustively:
+```graphql
+mutation {
+  create_column(
+    board_id: 12345,
+    title: "Customer Account",
+    column_type: board_relation,
+    defaults: "{\"boardIds\":[67890],\"allowCreateReflectionColumn\":true}"
+  ) { id title settings_str }
+}
+```
 
-- `update_column(settings: JSON)` accepts a `settings` argument that looks like it should work, but rejects every JSON shape attempted (`{"boardIds":[...]}`, `{"allowedValues":[...]}`, etc.) with `"Column schema validation failed"`.
-- `change_column_metadata` has a `column_property` enum with only two values: `title` and `description`. No `settings` / `boardIds` option.
-- No other mutation in the schema (`update_status_column`, `update_dropdown_column`, `change_column_title`, `connect_board_to_object_schema`, `create_object_relations`, etc.) configures the linked boards on a `board_relation` column.
+The returned `settings_str` confirms the wiring: `"{\"boardIds\":[67890],\"allowCreateReflectionColumn\":true}"`. After that, `change_multiple_column_values` with `{"item_ids": [...]}` works immediately.
 
-**The user MUST configure boardIds in the UI:** Click the column header → Settings → "Connect boards" → select the target board(s) → Save. After that, API writes (`{"item_ids": [...]}`) succeed normally.
+**Important caveats (verified):**
+- `defaults` is a top-level argument on `create_column`, NOT inside `columnSettings`. The MCP `create_column` tool wrapper exposes `columnSettings` for column-type config (e.g. status labels), but you must use raw GraphQL via `all_monday_api` to access the `defaults` argument for `board_relation`.
+- `defaults` works for `board_relation` boardIds. It may also work for other column types' initial config — test before assuming.
+- Pass the JSON as a string (escape inner quotes), since `defaults` is typed `JSON` (scalar, accepts string).
+- Set `allowCreateReflectionColumn: true` so the reverse-side column gets auto-created on the linked board (typical CRM-style behavior).
+- For the reverse column on the OTHER side, create a second `board_relation` column with `defaults: {boardIds:[<this board>], allowCreateReflectionColumn:false}` to avoid an infinite reflection chain.
 
-**Workaround when seeding a demo:**
-1. Create the `board_relation` column via API (just for the column to exist — names matter).
-2. **Stop and tell the user EXACTLY which columns need UI configuration**, e.g.:
-   > "I created the 'Recipient' column on Quotes & Invoices but couldn't connect it to the Contacts board via the API. **Click the column header → Settings → Connect boards → Contacts.** Once you do, message me and I'll wire all the items."
-3. After the user confirms UI config, write the `{"item_ids": [...]}` payloads.
+#### What does NOT work (also verified)
 
-**Native `board_relation` columns work out of the box** — when you use a native CRM/Dev/Service workspace, columns like `contact_account`, `deal_contact`, `task_sprint`, `bug_tasks` ship with `boardIds` already configured. Only NEWLY-CREATED `board_relation` columns hit this limitation.
+`update_column(settings: JSON)` and `change_column_metadata` cannot set `boardIds` AFTER creation:
+- `update_column` with `settings: "{\"boardIds\":[...]}"` returns `"Column schema validation failed"` (every JSON shape rejected).
+- `change_column_metadata.column_property` enum has only `title` and `description`. No `settings` / `boardIds` option.
 
-**Note on `link_board_items_workflow`:** The descriptions of `change_item_column_values` and `get_board_items_page` mention a `[REQUIRED PRECONDITION]` to call `link_board_items_workflow` for board-relation tasks — **but that tool is NOT exposed as a callable MCP tool, and writing/reading `board_relation` columns works fine without it (verified end-to-end in May 2026), assuming `boardIds` is already configured per the rule above.** Treat the precondition note as legacy/aspirational documentation, not a real requirement.
+**Therefore: if a `board_relation` column already exists with empty `boardIds`** (`settings_str: "{}"`), you must:
+1. `delete_column` it (if non-mandatory)
+2. Recreate via `create_column` with `defaults`
+
+If the existing column is **mandatory** (e.g. `bill_to` on native Quotes & Invoices, `board_relation6` on the native ITSM Tickets board), it cannot be deleted. In that case, create a NEW supplementary `board_relation` column alongside it — the mandatory empty one stays as a UI artifact, but your new column carries the data.
+
+#### Native columns — already wired
+
+Native CRM/Dev/Service `board_relation` columns ship with `boardIds` already configured (e.g. `contact_account`, `deal_contact`, `task_sprint`, `bug_tasks`, the ITSM `connect_boards2` Tickets↔Incidents pairing). Don't recreate them — use them.
+
+#### When user has ALREADY created a column with empty boardIds
+
+If the user manually created a `board_relation` column in the UI without picking a connected board (showing `settings_str: "{}"`), the API can't fix it. Two options:
+1. Have them open the column header → Settings → Connect boards → pick target → Save (UI fix).
+2. Or delete that column and recreate via `create_column.defaults` from the API.
+
+**Note on `link_board_items_workflow`:** The descriptions of `change_item_column_values` and `get_board_items_page` mention a `[REQUIRED PRECONDITION]` to call `link_board_items_workflow` for board-relation tasks — **but that tool is NOT exposed as a callable MCP tool, and writing/reading `board_relation` columns works fine without it (verified end-to-end in May 2026), as long as `boardIds` was set at creation per the `defaults` rule above.** Treat the precondition note as legacy/aspirational documentation, not a real requirement.
 
 CRM-style schema example:
 - `Accounts` ← `Contacts` (board_relation on Contacts → Accounts; mirror Account Name back)
@@ -750,7 +776,7 @@ Best practices:
 32. Creating a status/dropdown column on a board you intend to share label semantics across — use `attach_status_managed_column` / `attach_dropdown_managed_column` (linked to a managed column) instead of `create_status_column` / `create_dropdown_column` (board-local).
 33. Confusing `backfill_items` with `ingest_items` — backfill is for one-time data migration (no side-effects, 20k rows); ingest is for ongoing integrations (full side-effects, 10k rows).
 34. Citing error codes from memory in user-facing diagnostics — read the actual `error_code` from the API response.
-35. **Promising to "wire up" a NEW `board_relation` column without UI assistance** — `boardIds` cannot be set via API. Create the column, then stop and tell the user the exact UI clicks required. See §5.
+35. **Creating a `board_relation` column with empty boardIds and asking the user to wire it in the UI** — wrong. Use `create_column.defaults: "{\"boardIds\":[<id>]}"` (raw GraphQL via `all_monday_api`) to wire it at creation. The "needs UI handoff" rule was a patch7 mistake. See §5.
 36. **Promising `create_sprint` to provision the engineering sprint board set** — that mutation is not in the schema. The user must add the Sprint template via the monday UI first. See §1.5 / §13.
 37. **Quoting the response of `update_board` with a `{ id }` selection** — the response is bare JSON, not a `Board` object. See §6.
 
@@ -789,7 +815,7 @@ When the plan is approved, execute in this order to avoid forward-references:
 4. Columns per board (including `board_relation`). **For NEW `board_relation` columns, the `boardIds` setting is empty after creation — see step 7.**
 5. `mirror` columns (after `board_relation` exists on both sides).
 6. Groups.
-7. **STOP if any `board_relation` columns were created in step 4** — list every (board, column, target board) triple and ask the user to configure `boardIds` in the UI (column header → Settings → Connect boards). Without this, item-level link writes fail. Native columns (`contact_account`, `task_sprint`, `bug_tasks`, etc.) ship pre-wired and don't need this step. See §5.
+7. **For every `board_relation` column you create, use raw GraphQL `create_column` with `defaults: "{\"boardIds\":[<target>]}"`** — this wires the column at creation. Native columns (`contact_account`, `task_sprint`, `bug_tasks`, etc.) ship pre-wired and don't need this. See §5 for the exact mutation shape and the workaround when a mandatory empty column already exists.
 8. Seed items + initial column values. Use `createLabelsIfMissing: true` if seeding new status/dropdown labels. `board_relation` writes (`{"item_ids": [...]}`) work — once `boardIds` is set per step 7.
 9. Views (`create_view`).
 10. Forms (board must exist).
@@ -836,7 +862,7 @@ These are the things that bit during a real end-to-end build. Read this before y
 - **`create_subitem` is NOT a top-level MCP tool.** Use `create_item` with `parentItemId`. (The raw GraphQL `create_subitem` mutation does exist.)
 - **No `delete_workspace` MCP tool either** — and the raw GraphQL mutation is **frequently blocked by the MCP harness's safety classifier** ("Stage 2 classifier — permission denied"). When you need to delete a workspace and the harness blocks it, tell the user to delete it via the UI (sidebar → right-click → Delete workspace) rather than retrying.
 - **Webhook creation may be sandbox-blocked.** In some environments, creating webhooks pointed at external URLs (even `example.com`) is blocked by tooling-level guardrails. The API itself accepts the call; the harness denies it. Tell the user the URL/event combination you'd create rather than failing silently.
-- **`board_relation.boardIds` cannot be set via API at all.** See §5. The `update_column(settings: JSON)` and `change_column_metadata` paths both fail. Plan for a UI handoff step in the build sequence whenever you create a new `board_relation` column.
+- **`board_relation.boardIds` IS settable via `create_column.defaults: "{\"boardIds\":[<id>]}"`.** See §5. `update_column(settings)` and `change_column_metadata` cannot set boardIds AFTER creation, but `create_column.defaults` works at creation time. Use raw GraphQL via `all_monday_api` since the MCP `create_column` tool wrapper exposes `columnSettings` (column-type config, not the same arg). When a mandatory column already exists with empty boardIds, add a supplementary `board_relation` column instead.
 
 ### Errors
 - **`ColumnValueException`** is the standard error for bad column values. The error response includes `extensions.error_data` with `column_validation_error_code` (e.g. `missingLabel` for an unrecognized status label). `createLabelsIfMissing: true` is the fix for the `missingLabel` case.
@@ -872,7 +898,7 @@ These are the things that bit during a real end-to-end build. Read this before y
 
 ### Round-3 findings (cross-product demo build, May 2026)
 
-- **`board_relation.boardIds` is API-unsettable.** No mutation in `2026-07` configures the linked boards on a `board_relation` column — confirmed exhaustively (see §5). Any newly-created `board_relation` column is a UI-handoff item.
+- **`board_relation.boardIds` IS settable at creation via `create_column.defaults`.** Patch7 incorrectly stated this was impossible — the `defaults: JSON` argument on the `create_column` mutation accepts `{"boardIds":[...]}` and wires the column at creation. Verified end-to-end. Only `update_column.settings` is broken (still rejects `boardIds`). See §5 for the exact mutation shape, mandatory-column workaround, and reverse-side reflection guidance.
 - **`create_sprint` is not in the schema.** Native engineering sprint board pair (Sprints/Tasks/Epics/Bugs Queue/Retrospectives/Capacity) must be provisioned via UI sprint template. See §1.5 / §13.
 - **`update_board` returns bare JSON.** Args: `board_id, board_attribute, new_value`. NO `{ id }` selection — fails with `must not have a selection since type "JSON" has no subfields`. Multiple updates in one document need GraphQL aliases.
 - **`update_board_hierarchy` is the right tool for moving boards between workspaces or folders.** Args: `board_id, attributes: { workspace_id?, folder_id? }`. Response type is `UpdateBoardHierarchyResult { success, message, board }` — NO `id` or `errors` fields. Use this when restructuring demo workspaces mid-build.
