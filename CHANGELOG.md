@@ -2,6 +2,11 @@
 
 All notable changes to the monday-architect skill will be documented here.
 
+## [2026-05-07-patch11] — fix garbled anti-pattern #40 text (patch10 merge artifact)
+
+### Fixed
+- Anti-pattern #40 text was duplicated/garbled due to a patch10 merge artifact. Restored correct wording.
+
 ## [2026-05-07-patch10] — Nidek demo build findings (create_item two-step, permissions, dropdown shape, title5, Round-4)
 
 Verified end-to-end during the Nidek medical device demo build on 2026-05-07. Eight concrete API behaviors that were missing or incorrect in the skill.
