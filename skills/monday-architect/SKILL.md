@@ -1,7 +1,7 @@
 ---
 name: monday-architect
 description: Use this skill ANY time the user is building, modifying, or reasoning about a monday.com account via the monday MCP connector — workspaces, boards, dashboards, docs, forms, items, columns, widgets, CRM pipelines, Dev sprints, projects/portfolios, Connect Boards / mirrors, formulas, automations/triggers, webhooks, audit logs, integrations, the marketplace, the Objects platform, doc blocks, or anything queryable through the monday GraphQL API. Acts as the operator's manual for the MCP connector and forces correct product/architecture choices. Trigger on any mention of monday.com, monday boards/dashboards/docs, leads/deals/CRM, sprints/epics, item linking, the `mcp__claude_ai_monday_com__*` tool prefix, or monday GraphQL.
-version: 2026-05-07-patch11
+version: 2026-05-07-patch12
 ---
 
 # monday.com architect — operator's manual
@@ -938,7 +938,7 @@ These are the things that bit during a real end-to-end build. Read this before y
 - **`pin_to_top`, `like_update`, `unlike_update` etc. all use `id` arg** — not entity-specific names.
 - **Update mentions render as embedded HTML `<a class="user_mention_editor router">` tags** in the body when read back. Pass them via `mentionsList: '[{"id":"...","type":"User"}]'`.
 
-### Round-4 findings (Nidek medical device demo build, May 2026)
+### Round-4 findings (May 2026 build)
 
 - **`create_item` silently ignores `status` and `date` column values.** Passing `columnValues` with `{"status_column_id": {"label": "..."}, "date_column_id": {"date": "..."}}` on `create_item` creates the item with a name only — the column values are silently dropped. **Two-step pattern is mandatory, not optional:** `create_item` (name + group only) → `change_item_column_values` (all column values). This applies to both the MCP `create_item` tool and the raw GraphQL mutation via `all_monday_api`. Verified across multiple boards in May 2026.
 - **`update_status_column` must NOT include `id` in label objects.** The correct label shape is `{label: {name: "X", color: done_green}}` — the `id` field is read-only and rejected. Including `id` returns `"ColumnValueException: label id cannot be set manually"`. Remove `id` from every label definition when calling `update_status_column`.
