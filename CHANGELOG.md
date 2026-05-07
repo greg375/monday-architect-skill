@@ -2,6 +2,14 @@
 
 All notable changes to the monday-architect skill will be documented here.
 
+## [2026-05-07-patch12] — Scrub client identifiers from changelog/skill
+
+Removed specific account names from the changelog and SKILL.md headers. The verified findings themselves are unchanged — only the headings/attributions were edited. No API behavior changes.
+
+### Changed
+- §25 Round-4 heading: "Round-4 findings (May 2026 build)" — no client name.
+- CHANGELOG entries for patch9 and patch10 reworded to drop the specific account name.
+
 ## [2026-05-07-patch11] — Editorial cleanup (anti-pattern #40/#46 split, title5 stale reference)
 
 Two small content-integrity fixes from a skill review on 2026-05-07. No new API findings.
@@ -10,9 +18,9 @@ Two small content-integrity fixes from a skill review on 2026-05-07. No new API 
 - **§22 anti-pattern #40 was an orphan title; #46 had the body of #40 concatenated to its tail.** A patch10 merge artifact left "Creating a `board_relation` column without `boardIds` and assuming it works" with no explanation, and put the explanation at the end of the unrelated dropdown-shape entry. Split cleanly: #40 now contains its own body; #46 stands alone.
 - **§25 Round-4 `title5` finding referenced a contradiction with §1.5 that no longer exists.** §1.5 was already corrected in an earlier patch to say "CEO/COO/CIO only", but the Round-4 entry still claimed §1.5 listed Director/Manager/VP/etc. Stripped the stale callout; the rule itself is unchanged.
 
-## [2026-05-07-patch10] — Nidek demo build findings (create_item two-step, permissions, dropdown shape, title5, Round-4)
+## [2026-05-07-patch10] — May 2026 build findings (create_item two-step, permissions, dropdown shape, title5, Round-4)
 
-Verified end-to-end during the Nidek medical device demo build on 2026-05-07. Eight concrete API behaviors that were missing or incorrect in the skill.
+Verified end-to-end during a May 2026 build. Eight concrete API behaviors that were missing or incorrect in the skill.
 
 ### Added
 - **`create_item` silently ignores `status` and `date` column values.** Passing these in `columnValues` creates the item but drops the values without error. Two-step pattern is now documented as **mandatory**: `create_item` (name + group only) → `change_item_column_values` (all column values). Applies to both MCP tool and raw GraphQL.
@@ -30,7 +38,7 @@ Verified end-to-end during the Nidek medical device demo build on 2026-05-07. Ei
 
 ## [2026-05-05-patch9] — dashboard two-step, mirror column creation, mandatory column demo note
 
-Verified end-to-end during the Nidek medical device demo build on 2026-05-07.
+Verified end-to-end during a May 2026 build.
 
 ### Added
 - **§7 — `create_dashboard` produces an EMPTY CONTAINER.** Must always follow with `create_widget` calls. An empty dashboard in a demo is a failure. Full two-step workflow documented.
