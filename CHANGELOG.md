@@ -2,6 +2,34 @@
 
 All notable changes to the monday-architect skill will be documented here.
 
+## [2026-05-07-patch10] — Nidek demo build findings (create_item two-step, permissions, dropdown shape, title5, Round-4)
+
+Verified end-to-end during the Nidek medical device demo build on 2026-05-07. Eight concrete API behaviors that were missing or incorrect in the skill.
+
+### Added
+- **`create_item` silently ignores `status` and `date` column values.** Passing these in `columnValues` creates the item but drops the values without error. Two-step pattern is now documented as **mandatory**: `create_item` (name + group only) → `change_item_column_values` (all column values). Applies to both MCP tool and raw GraphQL.
+- **`update_status_column` must NOT include `id` in label objects.** The `id` field is read-only; including it returns `ColumnValueException: label id cannot be set manually`. Correct shape: `{label: {name: "X", color: done_green}}`.
+- **`allowCreateReflectionColumn: true` does NOT backfill reverse cells.** Creates the reverse column structure but all cells start empty. Must populate manually via `change_item_column_values` on the linked board for each item that needs a reverse link.
+- **Failed compound mutations may partially apply.** When `change_item_column_values` fails mid-batch, some values may already be written. Always re-query board state after failure before retrying.
+- **`permissions: owners` boards silently drop `board_relation` writes via `change_item_column_values`.** The mutation returns success but cells stay empty. Fix: use raw GraphQL `change_multiple_column_values` via `all_monday_api`.
+- **`title5` on native CRM Contacts has only 3 labels: CEO, COO, CIO.** All other labels (Director, Manager, VP, etc.) are rejected by the API. The §1.5 table previously listed additional labels that don't exist.
+- **`move_item_to_group` does NOT accept `boardId`.** Passing it causes `"Variable $boardId is never used"`. Args: `itemId` + `groupId` only.
+- **Dropdown column value shape is `{"labels": ["X"]}` (plural, array), NOT `{"label": "X"}`.** Using the status shape on a dropdown column silently fails — cell stays empty. Anti-pattern #46 added.
+
+### Fixed
+- §1.5 CRM Contacts `title5` column corrected: now shows "CEO/COO/CIO only" with cross-reference to Round-4 findings.
+- Anti-patterns updated: #41–#46 added for all Round-4 findings.
+
+## [2026-05-05-patch9] — dashboard two-step, mirror column creation, mandatory column demo note
+
+Verified end-to-end during the Nidek medical device demo build on 2026-05-07.
+
+### Added
+- **§7 — `create_dashboard` produces an EMPTY CONTAINER.** Must always follow with `create_widget` calls. An empty dashboard in a demo is a failure. Full two-step workflow documented.
+- **§5 — Mirror column creation via `create_column` MCP tool ALWAYS FAILS.** Only working method is raw GraphQL via `all_monday_api` with `defaults` string. Full mutation shape, key rules, and "Column value type is not supported" quirk documented.
+- **§5 — Mandatory `board_relation` demo note.** When migrating away from the board a mandatory column pointed at, the column becomes a permanently visible empty artifact. Cannot be deleted or hidden via API — UI-only fix via column chooser.
+- Anti-patterns #38–#40 added.
+
 ## [2026-05-05-patch8] — `create_column.defaults` correction (board_relation IS API-wirable)
 
 Patch7 incorrectly stated that `board_relation.boardIds` could not be set via the API. **It can — via the `defaults: JSON` argument on `create_column` (raw GraphQL).** Verified end-to-end on `2026-07` by wiring 14 cross-product `board_relation` columns and 27 item-level links during a single demo build.
