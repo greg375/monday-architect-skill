@@ -1,14 +1,14 @@
 ---
 name: monday-architect
 description: Use this skill ANY time the user is building, modifying, or reasoning about a monday.com account via the monday MCP connector — workspaces, boards, dashboards, docs, forms, items, columns, widgets, CRM pipelines, Dev sprints, projects/portfolios, Connect Boards / mirrors, formulas, automations/triggers, webhooks, audit logs, integrations, the marketplace, the Objects platform, doc blocks, or anything queryable through the monday GraphQL API. Acts as the operator's manual for the MCP connector and forces correct product/architecture choices. Trigger on any mention of monday.com, monday boards/dashboards/docs, leads/deals/CRM, sprints/epics, item linking, the `mcp__claude_ai_monday_com__*` tool prefix, or monday GraphQL.
-version: 2026-05-07-patch12
+version: 2026-05-08-patch13
 ---
 
 # monday.com architect — operator's manual
 
 You operate the monday.com MCP connector. The user expects builds that use native monday objects, correct typed schemas, and the full advanced API surface — not generic-board workarounds. This skill is your reference. Work through the relevant sections for the task at hand.
 
-> The API facts in this skill (product kinds, column types, board kinds, widget types, webhook events, dashboard visibility, mutation/query names, value shapes, error codes) were verified end-to-end against the monday GraphQL schema and the live MCP connector on **2026-05-05** against API release `release_candidate 2026-07`. Account-specific facts (board IDs, column IDs, group IDs, which products are enabled) MUST come from live MCP calls — never assume.
+> The API facts in this skill (product kinds, column types, board kinds, widget types, webhook events, dashboard visibility, mutation/query names, value shapes, error codes) were verified end-to-end against the monday GraphQL schema and the live MCP connector on **2026-05-08** against API release `release_candidate 2026-07`. Account-specific facts (board IDs, column IDs, group IDs, which products are enabled) MUST come from live MCP calls — never assume.
 >
 > **To re-verify against your own account and detect drift, run `/refresh-monday-skill`** (sister skill — same repo). Run it monthly, before high-stakes demos, or after any monday API release announcement.
 >
@@ -603,7 +603,7 @@ Key rules:
 3. For **each** widget: call `create_widget` with `parent_container_id: <dashboard_id>`, `parent_container_type: "DASHBOARD"`, `widget_kind`, `widget_name`, and `settings` conforming to the schema. Boards referenced in widget settings must already exist and have data — widgets sourced from empty boards render as blank.
 4. Verify widgets are visible in the UI before calling the dashboard complete.
 
-**There is no `list_widgets` / `delete_widget` via the API.** Once a widget is created, it can only be removed from the dashboard UI. Plan widget config carefully before executing `create_widget` — mistakes must be fixed manually.
+**There is no `list_widgets` query, but `delete_widget(id: ID!): Boolean` IS available as a mutation.** Capture the widget ID from the `create_widget` response and stash it — there is no API to enumerate existing widgets on a dashboard, so without that ID the only way to remove a widget is the dashboard UI. `delete_widget` returns `true` on success; subsequent calls against the same (now-gone) ID return a generic server error rather than a structured "not found", so the response is not idempotent — guard against double-deletes in your own code.
 
 For board-level analytics without building a dashboard, use `board_insights`.
 
@@ -650,7 +650,7 @@ For board-level analytics without building a dashboard, use `board_insights`.
 
 ## 11. Automations, triggers, integrations, webhooks (advanced)
 
-- **Webhooks**: first-class mutations `create_webhook` / `delete_webhook`; query existing with `webhooks`. `WebhookEventType` (verified, 22 events): `change_column_value`, `change_specific_column_value`, `change_status_column_value`, `change_name`, `change_subitem_column_value`, `change_subitem_name`, `create_item`, `create_subitem`, `create_column`, `create_update`, `create_subitem_update`, `edit_update`, `delete_update`, `item_archived`, `item_deleted`, `item_restored`, `item_moved_to_any_group`, `item_moved_to_specific_group`, `move_subitem`, `subitem_archived`, `subitem_deleted`. Use webhooks to drive external automations.
+- **Webhooks**: first-class mutations `create_webhook` / `delete_webhook`; query existing with `webhooks`. `WebhookEventType` (verified, 21 events): `change_column_value`, `change_specific_column_value`, `change_status_column_value`, `change_name`, `change_subitem_column_value`, `change_subitem_name`, `create_item`, `create_subitem`, `create_column`, `create_update`, `create_subitem_update`, `edit_update`, `delete_update`, `item_archived`, `item_deleted`, `item_restored`, `item_moved_to_any_group`, `item_moved_to_specific_group`, `move_subitem`, `subitem_archived`, `subitem_deleted`. Use webhooks to drive external automations.
 - **Integration blocks**: `execute_integration_block` mutation — run an integration block with provided field values.
 - **Trigger / automation analytics**: `trigger_events`, `trigger_event`, `block_events`, `tool_events`, `account_trigger_statistics`, `account_triggers_statistics_by_entity_id` (raw GraphQL) — diagnose automation runs.
 - **Validations**: `validations` query + mutations `create_validation_rule` / `update_validation_rule` / `delete_validation_rule` — board-level data validation rules.
@@ -962,7 +962,7 @@ These are the things that bit during a real end-to-end build. Read this before y
 - **`mirror` columns return `"Column value type is not supported"` when read via `get_board_items_page`** — even though they render correctly in the UI. Don't panic when a mirror reads as that string; verify visually in the UI instead.
 - **CRM native `board_relation` reads return `null` via API even when set.** `deal_contact`, `account_contact`, etc. populate correctly in the UI but `get_board_items_page` returns null arrays for those columns on some accounts. The data IS there — UI is the source of truth for these specific native columns.
 - **"Form auto-creates a Name question."** When you call `create_form`, the backing board comes pre-seeded with a `Name` question (id: `name`, type: `Name`). Trying to `create` another Name question fails with `ExceededUniqueQuestionTypeCount`. To customize, use `form_questions_editor(action: "update", questionId: "name", ...)` instead.
-- **Widget API has NO read/list/delete endpoint.** `create_widget` is one-way. There is no `widgets` query, no `delete_widget` mutation accessible to the MCP. To remove a broken widget, you must delete it via the dashboard UI. Plan for this when widgets reference deleted boards (their references stay broken until manually removed).
+- **Widget API has NO read/list endpoint, but `delete_widget(id: ID!): Boolean` works.** `create_widget` and `delete_widget` are both available as mutations (verified end-to-end). What's missing is any way to *list* widgets on a dashboard — `Dashboard` type has fields `id`, `name`, `workspace_id`, `kind`, `board_folder_id` and nothing else; no `widgets` query exists on `Query`. So you can only delete a widget if you saved its ID from the original `create_widget` response. Widgets pointing at deleted boards stay broken until you delete them by ID (or remove them via the UI).
 
 ### Data shapes seen on the wire
 - `boards.columns[].settings_str` is a JSON-encoded string — parse to inspect a column's actual stored config.

@@ -2,6 +2,18 @@
 
 All notable changes to the monday-architect skill will be documented here.
 
+## [2026-05-08-patch13] — `delete_widget` exists; webhook event count fix
+
+Two factual corrections caught by `/refresh-monday-skill` and verified end-to-end against a sandbox workspace. The skill previously asserted that `delete_widget` did not exist; the API has it, with a clean `(id: ID!): Boolean` signature, verified by creating and deleting a NUMBER widget on a throwaway dashboard.
+
+### Fixed
+- **§7 — `delete_widget(id: ID!): Boolean` exists and works.** Earlier text claimed widgets could only be removed via the dashboard UI. The mutation works; what's missing is any way to *list* widgets, since the `Dashboard` type exposes no `widgets` field and there is no `widgets` query. Capture the widget ID from the `create_widget` response and stash it — without it the only remaining option is the UI. Subsequent calls against an already-deleted ID return a generic server error rather than a structured "not found", so guard against double-deletes in your own code.
+- **§25 Round-3 — Same correction in the gotchas cheat sheet.** Rewrote the "Widget API has NO read/list/delete endpoint" entry to accurately describe what is and isn't available: `create_widget` and `delete_widget` both work; only the read/list path is missing.
+- **§11 — `WebhookEventType` count corrected from 22 to 21.** The inline list already enumerated 21 names; only the count was off.
+
+### Verified against API
+Re-introspected against `release_candidate 2026-07` on 2026-05-08. All other load-bearing facts (BoardKind, WorkspaceKind, DashboardKind, ColumnType (43 values), WorkspacesQueryAccountProductKind (8 values), ViewKind, SearchStrategy, NotificationTargetType, DuplicateBoardType, BoardMuteState, BulkImportState, widget catalog, all 16 CHART variants, every cited mutation) match the live schema verbatim.
+
 ## [2026-05-07-patch12] — Scrub client identifiers from changelog/skill
 
 Removed specific account names from the changelog and SKILL.md headers. The verified findings themselves are unchanged — only the headings/attributions were edited. No API behavior changes.
