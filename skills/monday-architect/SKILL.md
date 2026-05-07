@@ -1,7 +1,7 @@
 ---
 name: monday-architect
 description: Use this skill ANY time the user is building, modifying, or reasoning about a monday.com account via the monday MCP connector — workspaces, boards, dashboards, docs, forms, items, columns, widgets, CRM pipelines, Dev sprints, projects/portfolios, Connect Boards / mirrors, formulas, automations/triggers, webhooks, audit logs, integrations, the marketplace, the Objects platform, doc blocks, or anything queryable through the monday GraphQL API. Acts as the operator's manual for the MCP connector and forces correct product/architecture choices. Trigger on any mention of monday.com, monday boards/dashboards/docs, leads/deals/CRM, sprints/epics, item linking, the `mcp__claude_ai_monday_com__*` tool prefix, or monday GraphQL.
-version: 2026-05-05-patch8
+version: 2026-05-07-patch10
 ---
 
 # monday.com architect — operator's manual
@@ -124,7 +124,7 @@ The CRM workspace provisions these boards. Every monday CRM account has them.
 | Board | `item_terminology` | Key native column IDs | Cross-wired to |
 |---|---|---|---|
 | **Leads** | `Lead` | `lead_status` (status: New Lead/Attempted to contact/Contacted/Qualified/Unqualified), `lead_email` (email), `lead_phone` (phone), `lead_company` (text), `lead_owner` (people), `date` (Last activity), `location5` (location), `long_text` (Comments) | Contacts (duplicate detector), Accounts (existing account detector) |
-| **Contacts** | `Contact` | `contact_email` (email), `contact_phone` (phone), `contact_company` (text), `contact_account` (board_relation → Accounts), `contact_deal` (board_relation → Opportunities), `status` (Type: Customer/Vendor/Partner/VIP/N/A), `title5` (dropdown: CEO/COO/CIO/Director/Manager/VP/Team Member/C Level/), `date` (Last interaction), `location` (location) | Accounts, Opportunities, Leads |
+| **Contacts** | `Contact` | `contact_email` (email), `contact_phone` (phone), `contact_company` (text), `contact_account` (board_relation → Accounts), `contact_deal` (board_relation → Opportunities), `status` (Type: Customer/Vendor/Partner/VIP/N/A), `title5` (dropdown: **CEO/COO/CIO only** — API rejects any other label; see §25 Round-4), `date` (Last interaction), `location` (location) | Accounts, Opportunities, Leads |
 | **Accounts** | `Account` | `company_domain` (link), `industry` (dropdown — 51 standard industry values), `status` (Account Status: Buying process/Client/Past Client), `account_contact` (board_relation → Contacts), `account_deal` (board_relation → Opportunities), `mirror` (Account Value — SUM mirror of Won deal values), `employee_count` (text), `headquarters_loc` (text) | Contacts, Opportunities, Projects (post-sale) |
 | **Opportunities / Deals** | `Opportunity` | `deal_stage` (status: New/Discovery/Proposal/Negotiation/Legal/Won/Lost), `deal_value` (numbers $), `deal_owner` (people), `deal_expected_close_date` (date), `deal_close_date` (date), `deal_contact` (board_relation → Contacts), `deal_close_probability` (formula % from stage), `deal_forecast_value` (formula: value × probability), monthly actual formulas (Jan–Dec), `deal_length` (formula), `dup__of_deal_age` (stage length formula) | Contacts, Accounts, Legal, Onboarding/Finance |
 | **Sales Activities** | `Activity` | `activity_item` (board_relation → Leads/Contacts/Accounts/Opportunities/Activities), `activity_owner` (people), `activity_start_time` / `activity_end_time` (date), `activity_status` (status: Open/Done), `activity_type` (status: Meeting/Call summary), `long_text` (Description) | All CRM boards (unified activity log) |
@@ -504,6 +504,8 @@ The returned `settings_str` confirms the wiring: `"{\"boardIds\":[67890],\"allow
 
 If the existing column is **mandatory** (e.g. `bill_to` on native Quotes & Invoices, `board_relation6` on the native ITSM Tickets board), it cannot be deleted. In that case, create a NEW supplementary `board_relation` column alongside it — the mandatory empty one stays as a UI artifact, but your new column carries the data.
 
+> **Demo note (verified May 2026):** If you migrate away from the column a mandatory `board_relation` was pointing at (e.g. archiving a Customers board and replacing with CRM Accounts), the mandatory column becomes a broken empty artifact visible in every item. It cannot be deleted or hidden via API — only hidden from views manually in the UI. Tell the user to hide it via the column chooser. Do not leave it as a visible empty column in a demo.
+
 #### Native columns — already wired
 
 Native CRM/Dev/Service `board_relation` columns ship with `boardIds` already configured (e.g. `contact_account`, `deal_contact`, `task_sprint`, `bug_tasks`, the ITSM `connect_boards2` Tickets↔Incidents pairing). Don't recreate them — use them.
@@ -520,6 +522,31 @@ CRM-style schema example:
 - `Accounts` ← `Contacts` (board_relation on Contacts → Accounts; mirror Account Name back)
 - `Accounts` ← `Deals` (board_relation on Deals → Accounts; mirror Account Name; mirror Owner)
 - `Deals` ← `Activities` (board_relation on Activities → Deals)
+
+### ⚠️ Mirror column creation — `create_column` tool ALWAYS FAILS — use `all_monday_api` with raw `defaults`
+
+**Verified end-to-end May 2026.** The `create_column` MCP tool rejects mirror column creation with a schema validation error regardless of how you structure the `columnSettings` argument. The tool's JSON Schema does not include the `defaults` field needed for mirrors.
+
+**The only working method** is raw GraphQL via `all_monday_api`:
+
+```graphql
+mutation {
+  create_column(
+    board_id: <board_id>,
+    title: "Account Tier",
+    column_type: mirror,
+    defaults: "{\"mirrorType\":\"lookup\",\"relation_column_id\":\"<board_relation_column_id>\",\"displayed_linked_column_ids\":[\"<source_column_id_on_linked_board>\"]}"
+  ) { id title }
+}
+```
+
+Key rules:
+- `relation_column_id` — the ID of the `board_relation` column on THIS board that links to the source board. Must already exist and have `boardIds` configured.
+- `displayed_linked_column_ids` — array of column IDs on the **linked board** whose values you want to surface. Get these by calling `get_board_info` on the linked board first.
+- `defaults` is a JSON string (escape all inner quotes). It is NOT a nested object.
+- The API response will include `"Column value type is not supported"` in the `column_values` field when reading mirror values back via GraphQL — this is a known API quirk. The column **renders correctly in the UI**. Don't treat this as an error.
+- If you create a mirror pointing at the wrong source column, you cannot update it — `change_column_metadata` only supports `title` and `description`. Delete the mirror and recreate it with the correct `displayed_linked_column_ids`.
+- Always verify the source column IDs with `get_board_info` on the linked board before executing. Pointing at the wrong column ID produces a silent failure (column exists but shows nothing).
 
 ---
 
@@ -567,10 +594,16 @@ CRM-style schema example:
 
 **Anything not in the above list** (e.g., Kanban, Workload, Numbers Grouping, Quote, Iframe) is NOT exposed by the connector's `create_widget`. Don't promise it. If the user asks, propose the closest supported widget — or build it as a **board view** (`create_view`) instead, since views support a wider set of layouts (kanban, etc.).
 
-Workflow:
-1. `create_dashboard` (in a workspace, optionally a folder; `DashboardKind` is `PUBLIC` or `PRIVATE`).
-2. Call `all_widgets_schema` to get the JSON Schema 7 for the target widget.
-3. `create_widget` with config matching that schema, attached to source board(s).
+### ⚠️ `create_dashboard` produces an EMPTY CONTAINER — widgets are always a separate step
+
+**Verified end-to-end May 2026.** `create_dashboard` returns a dashboard ID with zero widgets. It is not usable until you call `create_widget` for every widget you want on it. An empty dashboard shown in a demo is worse than no dashboard. This is a two-step pattern, always:
+
+1. `create_dashboard` (in a workspace, optionally a folder; `DashboardKind` is `PUBLIC` or `PRIVATE`). Save the returned `dashboard_id`.
+2. Call `all_widgets_schema` to get the full JSON Schema 7 for every widget type you intend to add.
+3. For **each** widget: call `create_widget` with `parent_container_id: <dashboard_id>`, `parent_container_type: "DASHBOARD"`, `widget_kind`, `widget_name`, and `settings` conforming to the schema. Boards referenced in widget settings must already exist and have data — widgets sourced from empty boards render as blank.
+4. Verify widgets are visible in the UI before calling the dashboard complete.
+
+**There is no `list_widgets` / `delete_widget` via the API.** Once a widget is created, it can only be removed from the dashboard UI. Plan widget config carefully before executing `create_widget` — mistakes must be fixed manually.
 
 For board-level analytics without building a dashboard, use `board_insights`.
 
@@ -779,6 +812,15 @@ Best practices:
 35. **Creating a `board_relation` column with empty boardIds and asking the user to wire it in the UI** — wrong. Use `create_column.defaults: "{\"boardIds\":[<id>]}"` (raw GraphQL via `all_monday_api`) to wire it at creation. The "needs UI handoff" rule was a patch7 mistake. See §5.
 36. **Promising `create_sprint` to provision the engineering sprint board set** — that mutation is not in the schema. The user must add the Sprint template via the monday UI first. See §1.5 / §13.
 37. **Quoting the response of `update_board` with a `{ id }` selection** — the response is bare JSON, not a `Board` object. See §6.
+38. **Creating a mirror column via the `create_column` MCP tool** — it always fails with a schema validation error. Use `all_monday_api` with raw GraphQL and the `defaults` string argument. See §5.
+39. **Treating `create_dashboard` as producing a usable dashboard** — it returns an empty container with zero widgets. Always follow immediately with `create_widget` calls for every widget. An empty dashboard in a demo is a failure. See §7.
+40. **Creating a `board_relation` column without `boardIds` and assuming it works**
+41. **Passing `status` or `date` column values inside `create_item.columnValues`** — they are silently ignored. Always use two steps: `create_item` (name + group only) → `change_item_column_values` (all column values). See §25 Round-4.
+42. **Including `id` in label objects passed to `update_status_column`** — causes `ColumnValueException`. Remove `id` from every label definition; only `name` and `color` are accepted.
+43. **Assuming `allowCreateReflectionColumn: true` backfills reverse cells** — it only creates the reverse column structure. Reverse cells start empty and must be populated manually via `change_item_column_values` on the linked board. See §25 Round-4.
+44. **Retrying a failed compound mutation with the same payload** — partial writes may have already succeeded. Re-query board state first and only retry the columns that are still empty. See §25 Round-4.
+45. **Writing `board_relation` values via `change_item_column_values` on a `permissions: owners` board** — writes silently don't persist. Use raw GraphQL `change_multiple_column_values` via `all_monday_api` instead. See §25 Round-4.
+46. **Using `{"label": "X"}` shape for a `dropdown` column** — that is the `status` shape. Dropdown uses `{"labels": ["X"]}` (plural key, array value). Silent failure if wrong shape used. See §4. — a relation column with empty `boardIds` is non-functional: items cannot be linked via API, and the UI shows a broken picker. Always pass `boardIds` via `defaults` at creation time using `all_monday_api`. If a column already exists with empty `boardIds`, delete and recreate — you cannot patch it after the fact. See §5.
 
 ---
 
@@ -895,6 +937,18 @@ These are the things that bit during a real end-to-end build. Read this before y
 - **`validations(id: ID!)`** — the arg is named `id`, not `board_id`, but takes the board ID.
 - **`pin_to_top`, `like_update`, `unlike_update` etc. all use `id` arg** — not entity-specific names.
 - **Update mentions render as embedded HTML `<a class="user_mention_editor router">` tags** in the body when read back. Pass them via `mentionsList: '[{"id":"...","type":"User"}]'`.
+
+### Round-4 findings (Nidek medical device demo build, May 2026)
+
+- **`create_item` silently ignores `status` and `date` column values.** Passing `columnValues` with `{"status_column_id": {"label": "..."}, "date_column_id": {"date": "..."}}` on `create_item` creates the item with a name only — the column values are silently dropped. **Two-step pattern is mandatory, not optional:** `create_item` (name + group only) → `change_item_column_values` (all column values). This applies to both the MCP `create_item` tool and the raw GraphQL mutation via `all_monday_api`. Verified across multiple boards in May 2026.
+- **`update_status_column` must NOT include `id` in label objects.** The correct label shape is `{label: {name: "X", color: done_green}}` — the `id` field is read-only and rejected. Including `id` returns `"ColumnValueException: label id cannot be set manually"`. Remove `id` from every label definition when calling `update_status_column`.
+- **`allowCreateReflectionColumn: true` creates the reverse column structure but does NOT backfill reverse cells.** When you create a `board_relation` column with `allowCreateReflectionColumn: true`, the reverse `board_relation` column appears on the linked board, but all cells are empty. You must backfill the reverse cells manually: for each item on the linked board that should show a relation, call `change_item_column_values` on the reverse column with `{"item_ids": [...]}`. Or write relations on one side only and rely on the reverse to reflect automatically when both columns have `boardIds` configured.
+- **Failed compound mutations may partially apply — always re-query after failure.** When a multi-column `change_item_column_values` call fails (e.g., due to one bad label), some column values may already have been written before the error. Do NOT retry the full payload blindly — re-fetch board state first and only update the columns that failed.
+- **`permissions: owners` boards silently don't persist `board_relation` writes via `change_item_column_values`.** The mutation returns success but the cell stays empty. Fix: use raw GraphQL `change_multiple_column_values` via `all_monday_api` instead. If you encounter a board that consistently ignores board_relation writes even with correct `boardIds`, check the board's `permissions` setting and switch to raw GraphQL.
+- **`title5` dropdown on native CRM Contacts only has 3 labels: `CEO`, `COO`, `CIO`.** Despite the skill's §1.5 table listing additional labels (Director, Manager, VP, Team Member, C Level), the API rejects them with `"label does not exist, possible labels are: {1: CEO, 2: COO, 3: CIO}"`. When assigning job titles to CRM contacts, pick the closest of the three available values. Do NOT try to add new labels via `update_dropdown_column` — native column labels may be locked.
+- **`move_item_to_group` does NOT need `boardId`.** Passing `boardId` in variables causes `"Variable $boardId is never used in operation"`. Args: `itemId` + `groupId` only. Verified working without `boardId`.
+- **Dropdown column value shape is `{"labels": ["X"]}` (plural, array), NOT `{"label": "X"}`.** That is the status shape. Using `{"label": "X"}` on a `dropdown` column silently fails — cell stays empty. Always use `{"labels": [...]}` for dropdown.
+- **Mandatory `board_relation` columns on native service boards cannot be hidden via API.** The native ITSM Tickets board has a mandatory `board_relation6` column. If your demo migrates the linked board (e.g., replaces the original Customers board with CRM Accounts), the mandatory column becomes a permanently visible empty artifact. The only fix is UI-only: hide it via the column chooser in each board view. Add this to your pre-demo checklist.
 
 ### Round-3 findings (cross-product demo build, May 2026)
 
