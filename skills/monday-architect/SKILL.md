@@ -1,7 +1,7 @@
 ---
 name: monday-architect
 description: Use this skill ANY time the user is building, modifying, or reasoning about a monday.com account via the monday MCP connector — workspaces, boards, dashboards, docs, forms, items, columns, widgets, CRM pipelines, Dev sprints, projects/portfolios, Connect Boards / mirrors, formulas, automations/triggers, webhooks, audit logs, integrations, the marketplace, the Objects platform, doc blocks, or anything queryable through the monday GraphQL API. Acts as the operator's manual for the MCP connector and forces correct product/architecture choices. Trigger on any mention of monday.com, monday boards/dashboards/docs, leads/deals/CRM, sprints/epics, item linking, the `mcp__claude_ai_monday_com__*` tool prefix, or monday GraphQL.
-version: 2026-05-08-patch13
+version: 2026-05-11-patch14
 ---
 
 # monday.com architect — operator's manual
@@ -565,6 +565,8 @@ Key rules:
 - **Bulk read everything (one board):** `get_full_board_data` is internal-only and triggered by UI components — DO NOT call directly. Use `get_board_info` + `get_board_items_page` paginated.
 - **Aggregations:** `board_insights` (named tool) supports SUM/AVG/MIN/MAX/COUNT/COUNT_DISTINCT/MEDIAN with group-by + filters. The `aggregate` raw GraphQL query is even more flexible. Use these instead of fetching all items + counting client-side.
 - **Bulk write:** prefer multiple `create_item` calls; for large batches, fall back to `all_monday_api` with a multi-mutation document or use bulk-import jobs (`UploadJobInit`, `ItemsJobStatus`).
+- **Async bulk delete/archive:** `bulk_delete_items` and `bulk_archive_items` — asynchronously delete or archive all items on a board. Returns a job ID; poll with `fetch_job_status`. Useful for demo reset between sessions (faster than per-item deletion).
+- **Undo:** `undo_action(id: ID!)` — undo a previously completed action or cancel one still in flight. Returns `UndoResult`. Useful for error recovery after a bad bulk operation.
 - **Tags:** `create_or_get_tag`.
 - **Files:** `update_assets_on_item` (replace assets), `add_file_to_column` (append to a file column), `add_file_to_update` (attach to an update).
 - **Archive vs delete:** archive (reversible) preferred for user-facing data — `archive_board`, `archive_group`, `archive_item`. Use `delete_*` only when permanent removal is intended.
@@ -575,6 +577,8 @@ Key rules:
 - **Dependency batching:** `batch_update_dependency_column` (≤50 items per batch).
 - **Bulk import jobs:** `backfill_items` (no side effects, ≤20k rows, for migrations) vs `ingest_items` (full side effects, ≤10k rows, for ongoing integrations). Each returns a job ID + upload URL; check status with `fetch_job_status`.
 - **Alternative single-value writes:** `change_column_value`, `change_simple_column_value`, `change_multiple_column_values` exist alongside `change_item_column_values` — use whichever matches the granularity needed.
+- **Timeline items:** `create_timeline_item` / `delete_timeline_item` (raw GraphQL) — create/delete custom timeline entries on an item.
+- **Custom activities:** `create_custom_activity` / `delete_custom_activity` (raw GraphQL) — manage custom activity types for the activity log.
 
 ---
 
@@ -612,10 +616,13 @@ For board-level analytics without building a dashboard, use `board_insights`.
 ## 8. Forms
 
 - **`create_form` auto-creates a backing board for responses** — you do NOT need to create the board first. Pass `destination_workspace_id` (required), optional `destination_name`, `destination_folder_id`, `board_kind`, owners/subscribers. Returns `{board_id, form_token}`. Use the `form_token` for all subsequent question/setting operations.
-- **Edit questions:** `form_questions_editor` with `action: "create"|"update"|"delete"` and a question payload. Verified question types (23): `Boolean`, `ConnectedBoards`, `Country`, `DISPLAY_TEXT`, `Date`, `DateRange`, `Email`, `File`, `Link`, `Location`, `LongText`, `MultiSelect`, `Name`, `Number`, `PAGE_BLOCK`, `People`, `Phone`, `Rating`, `ShortText`, `Signature`, `SingleSelect`, `Subitems`, `Updates`. Question type cannot be changed after creation — always include `type` in update calls.
+- **Edit questions:** `form_questions_editor` with `action: "create"|"update"|"delete"` and a question payload. Alternatively, use the dedicated typed mutations: `create_form_question`, `update_form_question`, `delete_question`. Verified question types (23): `Boolean`, `ConnectedBoards`, `Country`, `DISPLAY_TEXT`, `Date`, `DateRange`, `Email`, `File`, `Link`, `Location`, `LongText`, `MultiSelect`, `Name`, `Number`, `PAGE_BLOCK`, `People`, `Phone`, `Rating`, `ShortText`, `Signature`, `SingleSelect`, `Subitems`, `Updates`. Question type cannot be changed after creation — always include `type` in update calls.
 - **Question settings (verified by type):** `defaultCurrentDate`/`includeTime` (Date), `display` (Single/MultiSelect: Dropdown/Horizontal/Vertical), `optionsOrder` (Alphabetical/Custom/Random), `labelLimitCount`+`label_limit_count_enabled` (MultiSelect), `prefill` (`{enabled, source: Account|QueryParam, lookup}`), `prefixAutofilled`/`prefixPredefined` (Phone), `default_answer`, `skipValidation` (Link), `checkedByDefault` (Boolean), `locationAutofilled`.
 - **Conditional logic:** `show_if_rules` with `operator: OR` and rule conditions referencing `building_block_id`.
-- Modify settings with `update_form`. Inspect with `get_form`.
+- **Form lifecycle:** `activate_form` (make visible, accept submissions) / `deactivate_form` (hide form, stop submissions — data preserved). Both take `form_token`.
+- **Password protection:** `set_form_password(input: SetFormPasswordInput!)` — enables password restriction on a form.
+- **Shorten URL:** `shorten_form_url` — generates and stores a shortened link; returns `FormShortenedLink`.
+- Modify settings with `update_form` / `update_form_settings`. Inspect with `get_form`.
 - Use the `form` query (raw GraphQL) by token to fetch a form for display/processing.
 - Form features available via settings: tags, AI translate, password protection, response limits, close date, redirect after submission, accessibility, draft submissions, prefill, pre/post submission views, custom logo/background/layout.
 
@@ -632,6 +639,7 @@ For board-level analytics without building a dashboard, use `board_insights`.
 - Advanced (raw GraphQL): `doc_version_history`, `doc_version_diff`, `export_markdown_from_doc`, `import_doc_from_html`, `articles` / `article_blocks` / `update_article_block` (knowledge base).
 - Use docs for: PRDs, meeting notes, wikis, runbooks, briefs, SOPs.
 - Don't put narrative content in a `long_text` column — it's not searchable, structured, or shareable the same way.
+- **`create_view_table` / `update_view_table`** — typed mutations for table views specifically (alternative to the generic `create_view` / `update_view`). Use when you need explicit table-view creation with strongly-typed settings.
 
 ---
 
@@ -713,6 +721,7 @@ If the user asks "automate X when Y happens", first decide:
 - Department mutations: `create_department`, `update_department`, `delete_department`, `assign_department_members`, `assign_department_owner`, `unassign_department_owners`, `clear_users_department`.
 - Board membership: `add_users_to_board`, `add_teams_to_board`, `delete_subscribers_from_board`, `delete_teams_from_board`.
 - Workspace membership: `add_users_to_workspace`, `add_teams_to_workspace`, `delete_users_from_workspace`, `delete_teams_from_workspace`.
+- **Directory resources:** `get_directory_resources` (query) + `update_directory_resources_attributes` (mutation) — manage resource attributes (Job Role, Skills, Location) for multiple users in the directory. `DirectoryResourceAttribute` enum: `JOB_ROLE`, `SKILLS`, `LOCATION`.
 - Use real user/team IDs in `people`/`team` columns and notifications.
 
 ---
@@ -724,7 +733,14 @@ monday's newer Objects platform models things like workflows/projects as first-c
 - `object_types_unique_keys` — list available object types. Each is identified by an `object_type_unique_key` formatted as `app_slug::app_feature_slug` (per-schema docstring); examples seen in docs are `'workflows'`, `'projects'`. Don't hardcode these — call the query.
 - `objects` — query objects with filters.
 - `object_relations` — fetch relations for an object.
-- Mutation: `update_object`, plus relation operations.
+- **Full CRUD mutations:**
+  - `create_object(object_type_unique_key, ...)` — create any object type (board, doc, dashboard, workflow, CRM, etc.). Under the hood creates a board with the corresponding `app_feature_id`.
+  - `update_object(input: UpdateObjectInput!)` — update an object.
+  - `delete_object(id: ID!)` — permanently delete (reversible within 30 days). Works for any object type.
+  - `archive_object(id: ID!)` — archive (preserves all data, hidden from regular views). Prefer over `delete_object` when reversibility matters.
+  - `publish_object(id: ID!)` / `unpublish_object(id: ID!)` — move object between draft and public state.
+  - `create_object_relations(...)` / `delete_object_relation(...)` — manage relations between objects.
+  - `add_subscribers_to_object(...)` — add users as subscribers or owners (equivalent to `add_users_to_board` for the Objects API).
 
 Use this when working with cross-cutting object types beyond boards/items.
 
@@ -732,8 +748,13 @@ Use this when working with cross-cutting object types beyond boards/items.
 
 ## 18. Knowledge base
 
-- `articles`, `article_blocks` — published KB articles.
+- `articles`, `article_blocks` — published KB articles (query-side).
 - `knowledge_base_search` — search snippets.
+- **Article mutations (full CRUD):**
+  - `create_article(workspace_id, name?, folder_id?)` — create a new article. Returns article metadata.
+  - `publish_article(object_id, privacy?, folder_id?, subscribers?)` — publish a draft article. Sets privacy level and manages subscribers.
+  - `update_article_block(block_id, ...)` — update content of a specific block in a **draft** article. Cannot update blocks of published articles.
+  - `delete_article(object_id)` — delete an article permanently.
 
 ---
 
@@ -1016,7 +1037,7 @@ This skill is most often used to build **demo accounts** — fully-loaded accoun
 - **Duplicating a doc:** `duplicate_doc`.
 - **Duplicating a board:** `duplicate_board` mutation. `DuplicateBoardType` enum (verified): `duplicate_board_with_structure` (structure only), `duplicate_board_with_pulses` (structure + items), `duplicate_board_with_pulses_and_updates` (structure + items + updates).
 - **Duplicating individual content:** `duplicate_item`, `duplicate_group`.
-- **Object schemas:** `create_object_schema` + `connect_board_to_object_schema` lets you define a column structure once and apply it to multiple boards. Use this when building a series of similar demo boards (e.g., one per region).
+- **Object schemas:** `create_object_schema` + `connect_board_to_object_schema` lets you define a column structure once and apply it to multiple boards. Use this when building a series of similar demo boards (e.g., one per region). Additional column management: `create_object_schema_columns`, `update_object_schema_columns`, `set_object_schema_column_active_state` (deactivate/reactivate a column), `detach_boards_from_object_schema`, `bulk_object_schema_column_actions` (execute multiple column actions in one request — stops on first failure).
 - **Managed columns:** `create_status_managed_column` + `attach_status_managed_column` on each board makes labels consistent across the demo so widgets aggregating across boards group cleanly.
 
 ### Demo tear-down / refresh
@@ -1136,7 +1157,7 @@ A common pattern is apps that let users switch which board they're targeting. Th
 - **WorkspaceKind** (3): `open`, `closed`, `template`.
 - **DashboardKind** (2): `PUBLIC`, `PRIVATE`.
 - **ColumnType** (40+): see §4.
-- **WebhookEventType** (22): see §11.
+- **WebhookEventType** (21): see §11.
 - **Widget types** in `all_widgets_schema`: `NUMBER`, `CHART`, `BATTERY`, `CALENDAR`, `GANTT`, `LISTVIEW`, `APP_FEATURE`. Anything else is unsupported via `create_widget`.
 
 If you find yourself about to state a fact in any of these categories that doesn't match the above, re-check via `get_type_details` — the schema may have evolved.
