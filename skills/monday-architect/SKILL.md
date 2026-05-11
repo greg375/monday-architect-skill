@@ -1,7 +1,7 @@
 ---
 name: monday-architect
 description: Use this skill ANY time the user is building, modifying, or reasoning about a monday.com account via the monday MCP connector — workspaces, boards, dashboards, docs, forms, items, columns, widgets, CRM pipelines, Dev sprints, projects/portfolios, Connect Boards / mirrors, formulas, automations/triggers, webhooks, audit logs, integrations, the marketplace, the Objects platform, doc blocks, or anything queryable through the monday GraphQL API. Acts as the operator's manual for the MCP connector and forces correct product/architecture choices. Trigger on any mention of monday.com, monday boards/dashboards/docs, leads/deals/CRM, sprints/epics, item linking, the `mcp__claude_ai_monday_com__*` tool prefix, or monday GraphQL.
-version: 2026-05-11-patch15
+version: 2026-05-11-patch16
 ---
 
 # monday.com architect — operator's manual
@@ -557,7 +557,7 @@ Key rules:
 - **Create item:** `create_item` with `boardId, name, columnValues` (and optional `groupId`).
 - **Create subitem:** use `create_item` with `parentItemId` set — there is no separate `create_subitem` MCP tool. Subitems live on a hidden auto-generated board (e.g. `Subitems of [BoardName]`); the response includes that board's ID. The raw GraphQL `create_subitem` mutation also exists for use via `all_monday_api`.
 - **Update values:** `change_item_column_values`. Pass `createLabelsIfMissing: true` when writing a status/dropdown label that may not yet exist on the column — without it the call fails. (Requires permission to change board structure.)
-- **Move/duplicate:** `move_object`.
+- **Move/duplicate:** `move_object` (relocate boards/docs/dashboards between workspaces or folders), `move_item_to_group(item_id, group_id)` (move item to a different group within the same board — distinct from `move_item_to_board` which crosses boards).
 - **Delete:** `delete_item`, `delete_group`, `delete_board`.
 - **Group:** `create_group`, `update_group`, `delete_group`. Groups are intra-board sections. New items always land in the **top group** — make the most relevant group the top group.
 - **Bulk read:**
@@ -576,6 +576,7 @@ Key rules:
 - **Item description (rich-text body):** `set_item_description_content` accepts markdown; `add_content_to_doc_from_markdown` appends to a doc.
 - **Column structural changes:** `change_column_metadata`, `change_column_title`, `delete_column`, `add_required_column`, `remove_required_column`. **`change_column_metadata.column_property` is an enum with only `title` and `description`** — it does NOT expose column settings (e.g., `boardIds` for `board_relation`). For label/option updates use `update_status_column` / `update_dropdown_column`. For `board_relation.boardIds` see §5 — UI-only.
 - **Board-level metadata:** `update_board(board_id: ID!, board_attribute: BoardAttributes!, new_value: String!)` — the response is bare JSON, NOT a `Board` object, so do NOT add a `{ id }` selection (you'll get `Field "update_board" must not have a selection since type "JSON" has no subfields`). `BoardAttributes` enum includes `description`, `name`, etc. Multiple `update_board` calls in one mutation document need aliases (e.g. `a: update_board(...)`, `b: update_board(...)`).
+- **Board hierarchy:** `update_board_hierarchy(input: UpdateBoardHierarchyAttributesInput!)` — update parent/child board relationships for portfolio-style hierarchies (`BoardHierarchy` enum). Use when wiring project boards into a portfolio structure.
 - **Dependency updates:** `update_dependency_column` (single item) or `batch_update_dependency_column` (≤50 items per batch) — both update dependency relationships on items.
 - **Clear updates:** `clear_item_updates(item_id: ID!)` — removes all updates (activity thread) from a single item. Useful for resetting demo items between sessions.
 - **Bulk import jobs:** `backfill_items` (no side effects, ≤20k rows, for migrations) vs `ingest_items` (full side effects, ≤10k rows, for ongoing integrations). Each returns a job ID + upload URL; check status with `fetch_job_status`.
@@ -592,7 +593,7 @@ Key rules:
 | Widget type | Use for |
 |---|---|
 | `NUMBER` | Single KPI (sum/avg/median/min/max of a numbers column, or item count). Supports prefix/suffix, currency/percentage formatting. |
-| `CHART` | **All 16 `graph_type` variants verified working end-to-end:** `pie`, `donut`, `bar`, `column`, `line`, `smooth_line`, `area`, `bubbles`, `stackedBar`, `stackedColumn`, `stackedArea`, `stackedLine`, `stackedBarPercent`, `stackedColumnPercent`, `stackedAreaPercent`, `stackedLinePercent`. Stacked variants need `z_axis_columns`. Percent-stacked variants display proportions within each X group. Time-series charts (line/area + variants) want `x_axis_group_by: "date"` plus `group_by: "week"|"month"|...`. Bubbles wants 3 axes (x, y, z) and a numeric calc function. |
+| `CHART` | **24 `graph_type` variants in live schema:** `pie`, `donut`, `bar`, `column`, `line`, `smooth_line`, `area`, `bubbles`, `stackedBar`, `stackedColumn`, `stackedArea`, `stackedLine`, `stackedBarPercent`, `stackedColumnPercent`, `stackedAreaPercent`, `stackedLinePercent` (camelCase — verified working end-to-end) plus underscore aliases `stacked_bar`, `stacked_column`, `stacked_area`, `stacked_line`, `stacked_bar_percent`, `stacked_column_percent`, `stacked_area_percent`, `stacked_line_percent`. Both forms accepted. Stacked variants need `z_axis_columns`. Percent-stacked variants display proportions within each X group. Time-series charts (line/area + variants) want `x_axis_group_by: "date"` plus `group_by: "week"|"month"|...`. Bubbles wants 3 axes (x, y, z) and a numeric calc function. |
 | `BATTERY` | Progress bar across boards/columns based on a "done" status label. Supports per-board status column lists, optional numeric weighting, group filtering. |
 | `CALENDAR` | Date/timeline/week/creation_log/last_updated/lookup/formula columns rendered as calendar events. View modes month/week/day. Color-by board / group / parent / status / person / dropdown / board-relation / subtasks. |
 | `GANTT` | Timeline/Gantt for timeline+date columns. Group/color/label by board/group/parent/color. |
