@@ -1,7 +1,7 @@
 ---
 name: monday-architect
 description: Use this skill ANY time the user is building, modifying, or reasoning about a monday.com account via the monday MCP connector — workspaces, boards, dashboards, docs, forms, items, columns, widgets, CRM pipelines, Dev sprints, projects/portfolios, Connect Boards / mirrors, formulas, automations/triggers, webhooks, audit logs, integrations, the marketplace, the Objects platform, doc blocks, or anything queryable through the monday GraphQL API. Acts as the operator's manual for the MCP connector and forces correct product/architecture choices. Trigger on any mention of monday.com, monday boards/dashboards/docs, leads/deals/CRM, sprints/epics, item linking, the `mcp__claude_ai_monday_com__*` tool prefix, or monday GraphQL.
-version: 2026-05-11-patch14
+version: 2026-05-11-patch15
 ---
 
 # monday.com architect — operator's manual
@@ -326,7 +326,7 @@ Before writing any mutation:
   - Tools: `create_workspace`, `update_workspace`, `list_workspaces`, `workspace_info`.
   - Filter workspaces by product via `WorkspacesQueryInput.kind` (raw GraphQL).
 - **Folder** — group related boards/dashboards/docs inside a workspace.
-  - Tools: `create_folder` (16-color enum: `AQUAMARINE`, `BRIGHT_BLUE`, `BRIGHT_GREEN`, `CHILI_BLUE`, `DARK_ORANGE`, `DARK_PURPLE`, `DARK_RED`, `DONE_GREEN`, `INDIGO`, `LIPSTICK`, `NULL`, `PURPLE`, `SOFIA_PINK`, `STUCK_RED`, `SUNSET`, `WORKING_ORANGE`; plus `customIcon` and `fontWeight` enums), `update_folder`, `move_object`.
+  - Tools: `create_folder` (16-color enum: `AQUAMARINE`, `BRIGHT_BLUE`, `BRIGHT_GREEN`, `CHILI_BLUE`, `DARK_ORANGE`, `DARK_PURPLE`, `DARK_RED`, `DONE_GREEN`, `INDIGO`, `LIPSTICK`, `NULL`, `PURPLE`, `SOFIA_PINK`, `STUCK_RED`, `SUNSET`, `WORKING_ORANGE`; plus `customIcon` and `fontWeight` enums), `update_folder`, `delete_folder`, `move_object`.
   - **`create_board` does NOT take a folder ID** — boards land at workspace root. After creating, call `move_object` with `objectType: "Board"`, `id: <boardId>`, `parentFolderId: <folderId>`. (Verified end-to-end.)
   - `workspace_info` returns up to 100 of each object type per workspace; paginate for larger.
 - Use folders. Don't dump 20 boards at the workspace root.
@@ -354,7 +354,8 @@ Quick reference: CRM boards → "CRM" workspace; Dev boards → "Dev" workspace;
 | Cross-board visualization | **Dashboard + widgets** | `create_dashboard`, `create_widget` |
 | Sprint/epic tracking | **Dev sprint board** | Native `software` workspace + sprint queries |
 | Saved view of a board | **View** (table or app-embed only — see note) | `create_view`, `update_view`, `delete_view`; pre-fetch `get_view_schema_by_type(type: <ViewKind>, mutationType: CREATE)` |
-| Reusable column definitions | **Managed column** | `create_status_managed_column`, `create_dropdown_managed_column`, then update/activate/deactivate/delete |
+| Reusable column definitions | **Managed column** | `create_status_managed_column`, `create_dropdown_managed_column`, then `update_status_managed_column`, `update_dropdown_managed_column`, `activate_managed_column`, `deactivate_managed_column`, `delete_managed_column` |
+| Provision from template | `use_template(template_id, ...)` | Creates a board/workspace from a saved template |
 
 **Important:** the `BoardKind` enum exposes only `private` / `public` / `share` — visibility, not template type. There is NO "portfolio board kind". Portfolios are built from **Projects** (`create_project` / `create_portfolio` / `connect_project_to_portfolio`) — a separate object hierarchy. To convert an existing board into a project, use `convert_board_to_project`.
 
@@ -455,6 +456,7 @@ Workflow:
 6. **Status `index` field gotcha (raw GraphQL):** when creating a status column with explicit indexes, the API stores labels keyed by the **color ID** (the `StatusColumnColors` numeric value), NOT the `index` field you provide. So a label you created with `index: 0` and `color: "american_gray"` is stored at key `17` (the ID of `american_gray`). When using `change_simple_column_value` with an integer index, you must use the **color ID**, not your assigned index. The `change_item_column_values` MCP tool with `{"label": "..."}` avoids this entirely — prefer label-based writes.
 7. **In raw GraphQL, status colors are an enum, not a string** — write `color: done_green` (unquoted) inside a mutation, NOT `color: "done_green"`. The MCP `create_column` wrapper accepts strings via `columnSettings` because it serializes JSON, but `all_monday_api` calls into mutations like `create_status_managed_column` need raw enum syntax.
 8. To update column-level metadata (e.g., status labels, dropdown options), use `update_status_column`, `update_dropdown_managed_column`, etc.
+9. **Managed column lifecycle:** `activate_managed_column(id)` / `deactivate_managed_column(id)` toggles a managed column between active and inactive state across all boards using it. `delete_managed_column(id)` permanently removes it. `update_status_managed_column` / `update_dropdown_managed_column` update labels/options on managed columns.
 
 ---
 
@@ -574,7 +576,8 @@ Key rules:
 - **Item description (rich-text body):** `set_item_description_content` accepts markdown; `add_content_to_doc_from_markdown` appends to a doc.
 - **Column structural changes:** `change_column_metadata`, `change_column_title`, `delete_column`, `add_required_column`, `remove_required_column`. **`change_column_metadata.column_property` is an enum with only `title` and `description`** — it does NOT expose column settings (e.g., `boardIds` for `board_relation`). For label/option updates use `update_status_column` / `update_dropdown_column`. For `board_relation.boardIds` see §5 — UI-only.
 - **Board-level metadata:** `update_board(board_id: ID!, board_attribute: BoardAttributes!, new_value: String!)` — the response is bare JSON, NOT a `Board` object, so do NOT add a `{ id }` selection (you'll get `Field "update_board" must not have a selection since type "JSON" has no subfields`). `BoardAttributes` enum includes `description`, `name`, etc. Multiple `update_board` calls in one mutation document need aliases (e.g. `a: update_board(...)`, `b: update_board(...)`).
-- **Dependency batching:** `batch_update_dependency_column` (≤50 items per batch).
+- **Dependency updates:** `update_dependency_column` (single item) or `batch_update_dependency_column` (≤50 items per batch) — both update dependency relationships on items.
+- **Clear updates:** `clear_item_updates(item_id: ID!)` — removes all updates (activity thread) from a single item. Useful for resetting demo items between sessions.
 - **Bulk import jobs:** `backfill_items` (no side effects, ≤20k rows, for migrations) vs `ingest_items` (full side effects, ≤10k rows, for ongoing integrations). Each returns a job ID + upload URL; check status with `fetch_job_status`.
 - **Alternative single-value writes:** `change_column_value`, `change_simple_column_value`, `change_multiple_column_values` exist alongside `change_item_column_values` — use whichever matches the granularity needed.
 - **Timeline items:** `create_timeline_item` / `delete_timeline_item` (raw GraphQL) — create/delete custom timeline entries on an item.
@@ -606,6 +609,8 @@ Key rules:
 2. Call `all_widgets_schema` to get the full JSON Schema 7 for every widget type you intend to add.
 3. For **each** widget: call `create_widget` with `parent_container_id: <dashboard_id>`, `parent_container_type: "DASHBOARD"`, `widget_kind`, `widget_name`, and `settings` conforming to the schema. Boards referenced in widget settings must already exist and have data — widgets sourced from empty boards render as blank.
 4. Verify widgets are visible in the UI before calling the dashboard complete.
+
+**Dashboard mutations:** `update_dashboard(id: ID!, ...)` — update dashboard metadata (name, description, visibility). `update_overview_hierarchy` — reorder/rearrange items in the overview/hierarchy view of a dashboard. `delete_dashboard(id: ID!)` — delete a dashboard permanently.
 
 **There is no `list_widgets` query, but `delete_widget(id: ID!): Boolean` IS available as a mutation.** Capture the widget ID from the `create_widget` response and stash it — there is no API to enumerate existing widgets on a dashboard, so without that ID the only way to remove a widget is the dashboard UI. `delete_widget` returns `true` on success; subsequent calls against the same (now-gone) ID return a generic server error rather than a structured "not found", so the response is not idempotent — guard against double-deletes in your own code.
 
@@ -650,6 +655,7 @@ For board-level analytics without building a dashboard, use `board_insights`.
 - `replies` query (raw GraphQL) — get replies on updates.
 - `like_update` / `unlike_update` / `pin_to_top` / `unpin_from_top` / `edit_update` / `delete_update` (raw GraphQL).
 - `create_notification` — push a notification to a user. `NotificationTargetType` has two values: `Post` (an Update) and `Project` (an Item or Board) — pick by what the user should be linked to.
+- `update_notification_setting` — update a user's notification preferences (raw GraphQL).
 - `notifications_settings` / `mute_board_settings` (raw GraphQL) — read user preferences.
 - `get_assets` — list files attached to items/updates.
 - `get_board_activity` — board audit log.
@@ -1037,7 +1043,7 @@ This skill is most often used to build **demo accounts** — fully-loaded accoun
 - **Duplicating a doc:** `duplicate_doc`.
 - **Duplicating a board:** `duplicate_board` mutation. `DuplicateBoardType` enum (verified): `duplicate_board_with_structure` (structure only), `duplicate_board_with_pulses` (structure + items), `duplicate_board_with_pulses_and_updates` (structure + items + updates).
 - **Duplicating individual content:** `duplicate_item`, `duplicate_group`.
-- **Object schemas:** `create_object_schema` + `connect_board_to_object_schema` lets you define a column structure once and apply it to multiple boards. Use this when building a series of similar demo boards (e.g., one per region). Additional column management: `create_object_schema_columns`, `update_object_schema_columns`, `set_object_schema_column_active_state` (deactivate/reactivate a column), `detach_boards_from_object_schema`, `bulk_object_schema_column_actions` (execute multiple column actions in one request — stops on first failure).
+- **Object schemas:** `create_object_schema` + `connect_board_to_object_schema` lets you define a column structure once and apply it to multiple boards. Use this when building a series of similar demo boards (e.g., one per region). Schema lifecycle: `update_object_schema` (rename/update metadata), `delete_object_schema` (remove schema entirely — detaches all connected boards first). Additional column management: `create_object_schema_columns`, `update_object_schema_columns`, `set_object_schema_column_active_state` (deactivate/reactivate a column), `detach_boards_from_object_schema`, `bulk_object_schema_column_actions` (execute multiple column actions in one request — stops on first failure).
 - **Managed columns:** `create_status_managed_column` + `attach_status_managed_column` on each board makes labels consistent across the demo so widgets aggregating across boards group cleanly.
 
 ### Demo tear-down / refresh
